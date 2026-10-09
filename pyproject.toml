@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gitcontext"
+version = "0.1.0"
+description = "AI-powered codebase intelligence copilot - Phase 1: Local Code & Doc Indexing and BM25 Search"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Aditya Raj" }
+]
+dependencies = [
+    "rank-bm25>=0.2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+gitcontext = "gitcontext.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
