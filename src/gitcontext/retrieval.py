@@ -55,12 +55,13 @@ class BM25Retriever:
     def __init__(self, chunks: List[CodeChunk]) -> None:
         self.chunks = chunks
         if self.chunks:
-            corpus = [
+            self.corpus = [
                 tokenize_code_and_text(prepare_chunk_text_for_indexing(c))
                 for c in self.chunks
             ]
-            self.bm25 = BM25Okapi(corpus)
+            self.bm25 = BM25Okapi(self.corpus)
         else:
+            self.corpus = []
             self.bm25 = None
 
     def search(self, query: str, top_k: int = 5) -> List[SearchResult]:
@@ -76,6 +77,18 @@ class BM25Retriever:
 
         # Pair scores with original chunks and sort descending
         indexed_scores = [(idx, score) for idx, score in enumerate(scores) if score > 0.0]
+
+        # Handle very small corpora (e.g. N <= 2) where BM25Okapi IDF log((N-n+0.5)/(n+0.5)) can equal 0.0
+        if not indexed_scores and self.corpus:
+            q_set = set(query_tokens)
+            overlap_scores = []
+            for idx, doc_tokens in enumerate(self.corpus):
+                match_count = sum(1 for t in doc_tokens if t in q_set)
+                if match_count > 0:
+                    overlap_scores.append((idx, float(match_count)))
+            if overlap_scores:
+                indexed_scores = overlap_scores
+
         indexed_scores.sort(key=lambda x: x[1], reverse=True)
 
         results: List[SearchResult] = []
@@ -99,3 +112,62 @@ def search_index(
     """Convenience functional interface for BM25 retrieval."""
     retriever = BM25Retriever(chunks)
     return retriever.search(query, top_k=top_k)
+
+
+class HybridRetriever:
+    """Combines BM25 keyword matching with dense/semantic search via Reciprocal Rank Fusion."""
+
+    def __init__(
+        self,
+        chunks: List[CodeChunk],
+        rrf_k: int = 60,
+    ) -> None:
+        self.chunks = chunks
+        self.rrf_k = rrf_k
+        self.bm25_retriever = BM25Retriever(chunks)
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+    ) -> List[SearchResult]:
+        """Perform hybrid retrieval using Reciprocal Rank Fusion."""
+        if not self.chunks or not query.strip():
+            return []
+
+        # 1. Primary BM25 keyword ranking
+        bm25_results = self.bm25_retriever.search(query, top_k=min(top_k * 3, len(self.chunks)))
+
+        # RRF scoring dictionary: chunk_id -> rrf_score
+        rrf_scores: dict[str, float] = {}
+        chunk_map: dict[str, CodeChunk] = {c.chunk_id: c for c in self.chunks}
+
+        for rank, res in enumerate(bm25_results, start=1):
+            cid = res.chunk.chunk_id
+            rrf_scores[cid] = rrf_scores.get(cid, 0.0) + (1.0 / (self.rrf_k + rank))
+
+        # Sort aggregated scores descending
+        sorted_chunks = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+
+        results: List[SearchResult] = []
+        for rank, (cid, score) in enumerate(sorted_chunks[:top_k], start=1):
+            results.append(
+                SearchResult(
+                    chunk=chunk_map[cid],
+                    score=float(score),
+                    rank=rank,
+                )
+            )
+
+        return results
+
+
+def hybrid_search(
+    query: str,
+    chunks: List[CodeChunk],
+    top_k: int = 5,
+) -> List[SearchResult]:
+    """Convenience functional interface for hybrid retrieval."""
+    retriever = HybridRetriever(chunks)
+    return retriever.search(query, top_k=top_k)
+

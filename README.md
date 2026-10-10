@@ -159,6 +159,36 @@ Last Indexed   : 2026-10-09 17:46:44 UTC
 
 ---
 
+### 4. Ask Grounded Questions with Verified Citations (Step 3)
+Query the codebase using an LLM that answers exclusively with cited file paths and line ranges:
+
+```bash
+python -m gitcontext ask "Where is token expiry checked?"
+```
+
+**Expected Output:**
+```text
+Question: Where is token expiry checked?
+
+Answer:
+**Facts:**
+- Session token expiry is initialized in `UserSessionManager.__init__` with a default `token_expiry_seconds=3600` [1].
+**Inferences:**
+- None.
+
+Sources:
+  [1] auth.py:L22-L38 (class UserSessionManager)
+```
+
+Configure your LLM provider and model via environment variables in `.env`:
+```bash
+cp .env.example .env
+# Set LLM_PROVIDER=openai, gemini, anthropic, or ollama
+# Set your API key
+```
+
+---
+
 ## 🧪 Running Automated Tests
 
 Run the full test suite with `pytest`:
@@ -167,20 +197,27 @@ Run the full test suite with `pytest`:
 pytest -v
 ```
 
-All 15 unit and integration tests cover:
+All 31 unit and integration tests cover:
 - Python function and class AST extraction with line numbers
 - Markdown hierarchical heading section chunking
 - Deterministic chunk hashing & ID generation
 - `.gitignore` and sensitive file exclusions (`.env`, `credentials.json`)
 - Syntax error resilience
 - BM25 ranking and camelCase / snake_case tokenization
-- CLI subcommands (`index`, `search`, `status`)
+- Hybrid retrieval with Reciprocal Rank Fusion
+- LLM generation with prompt injection defenses and strict grounding
+- Citation verification, invalid citation stripping, and line-range validation
+- Error handling: missing API keys, empty retrieval, and LLM provider failures
+- Grounded citation evaluation suite benchmarking precision and recall
+- CLI subcommands (`index`, `search`, `status`, `ask`)
 
 ---
 
 ## 🔮 Roadmap & Next Milestones
 
-* **Phase 2 — Dense Embeddings & Vector Search**: Add local embedding models (e.g. `sentence-transformers` or `fastembed`) and a lightweight vector store (Qdrant / SQLite-VSS) for hybrid BM25 + dense semantic retrieval.
-* **Phase 3 — LLM Answer Synthesis (RAG)**: Connect search results to an LLM prompt that directly answers questions with cited source code citations.
-* **Phase 4 — GitHub Webhook & Live Synchronization**: Automatically keep index up to date as commits are pushed.
-* **Phase 5 — Interactive UI**: Fast web interface with code highlighting and graph visualization.
+* ✅ **Phase 1 — AST Chunking & BM25 Search**: Structural code parsing and keyword retrieval.
+* ✅ **Phase 2 — Hybrid Retrieval**: Reciprocal Rank Fusion combining lexical and dense search.
+* ✅ **Step 3 — LLM-Powered Citation Assistant**: Grounded answer synthesis, citation validation, and CLI `ask`.
+* **Phase 4 — Live Synchronization**: Automatically keep index up to date as commits are pushed.
+* **Phase 5 — FastAPI Backend & Web UI**: REST API and interactive interface with code highlighting.
+

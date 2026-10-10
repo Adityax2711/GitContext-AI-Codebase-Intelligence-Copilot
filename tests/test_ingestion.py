@@ -3,7 +3,6 @@
 from pathlib import Path
 import pytest
 from gitcontext.ingestion import (
-    GitIgnoreFilter,
     discover_repository_files,
     read_source_file,
 )

@@ -7,7 +7,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from gitcontext.assistant import ask_codebase
 from gitcontext.indexing import get_default_index_dir, index_repository, load_index
+from gitcontext.llm import LLMError
 from gitcontext.retrieval import search_index
 
 
@@ -119,11 +121,45 @@ def cmd_status(index_dir_str: Optional[str] = None) -> int:
     return 0
 
 
+def cmd_ask(
+    question: str,
+    top_k: int = 5,
+    index_dir_str: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+) -> int:
+    """Handle the 'ask' subcommand."""
+    question = question.strip()
+    if not question:
+        print("Error: Question cannot be empty.", file=sys.stderr)
+        return 1
+
+    index_dir = Path(index_dir_str) if index_dir_str else get_default_index_dir()
+
+    try:
+        response = ask_codebase(
+            question=question,
+            index_dir=index_dir,
+            top_k=top_k,
+            provider=provider,
+            model=model,
+        )
+    except LLMError as e:
+        print(f"LLM Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error answering question: {e}", file=sys.stderr)
+        return 1
+
+    print(response.format_cli_output())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct CLI argument parser."""
     parser = argparse.ArgumentParser(
         prog="gitcontext",
-        description="GitContext: AI-powered codebase intelligence copilot (Phase 1).",
+        description="GitContext: AI-powered codebase intelligence copilot.",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
@@ -142,6 +178,14 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status", help="Show current index information and metadata")
     status_parser.add_argument("--index-dir", type=str, default=None, help="Custom index directory to inspect")
 
+    # ask subcommand
+    ask_parser = subparsers.add_parser("ask", help="Ask a question about the indexed codebase and get grounded answers with citations")
+    ask_parser.add_argument("question", type=str, help="Question to ask about the codebase")
+    ask_parser.add_argument("--top-k", type=int, default=5, help="Number of evidence chunks to retrieve (default: 5)")
+    ask_parser.add_argument("--index-dir", type=str, default=None, help="Custom directory containing the index")
+    ask_parser.add_argument("--provider", type=str, default=None, help="LLM provider (e.g. openai, gemini, anthropic, ollama, mock)")
+    ask_parser.add_argument("--model", type=str, default=None, help="LLM model name")
+
     return parser
 
 
@@ -156,6 +200,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         return cmd_search(args.query, top_k=args.top_k, index_dir_str=args.index_dir)
     elif args.command == "status":
         return cmd_status(args.index_dir)
+    elif args.command == "ask":
+        return cmd_ask(
+            question=args.question,
+            top_k=args.top_k,
+            index_dir_str=args.index_dir,
+            provider=args.provider,
+            model=args.model,
+        )
     else:
         parser.print_help()
         return 0
@@ -163,3 +215,4 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

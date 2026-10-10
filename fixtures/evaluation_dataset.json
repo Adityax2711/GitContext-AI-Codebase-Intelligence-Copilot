@@ -1,0 +1,42 @@
+[
+  {
+    "id": "eval_1",
+    "question": "Where is token expiry checked or configured?",
+    "expected_files": ["auth.py"],
+    "expected_symbols": ["UserSessionManager"],
+    "is_answerable": true,
+    "description": "Tests retrieval and citation of session token expiry parameters."
+  },
+  {
+    "id": "eval_2",
+    "question": "How is user password hashed and verified?",
+    "expected_files": ["auth.py"],
+    "expected_symbols": ["hash_user_password", "verify_user_credentials"],
+    "is_answerable": true,
+    "description": "Tests retrieval and citation of cryptographic password hashing and verification functions."
+  },
+  {
+    "id": "eval_3",
+    "question": "Where is Stripe payment processing and customer charging implemented?",
+    "expected_files": ["payment.py"],
+    "expected_symbols": ["StripePaymentGateway", "charge_customer"],
+    "is_answerable": true,
+    "description": "Tests retrieval and citation of Stripe gateway charge logic."
+  },
+  {
+    "id": "eval_4",
+    "question": "Where is sales tax calculated for customer invoices?",
+    "expected_files": ["payment.py"],
+    "expected_symbols": ["calculate_tax"],
+    "is_answerable": true,
+    "description": "Tests retrieval and citation of sales tax calculation helper."
+  },
+  {
+    "id": "eval_5",
+    "question": "Where is Kubernetes cluster configuration or Docker container deployment handled?",
+    "expected_files": [],
+    "expected_symbols": [],
+    "is_answerable": false,
+    "description": "Negative unanswerable test to verify 'insufficient evidence' grounding."
+  }
+]
