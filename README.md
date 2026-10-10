@@ -1,6 +1,6 @@
 # GitContext 🔍
 
-> **AI-Powered Codebase Intelligence Copilot — Phase 1 (Local Code/Doc Chunking & BM25 Search)**
+> **AI-Powered Codebase Intelligence Copilot — Hybrid Retrieval & Citation-Grounded LLM Assistant**
 
 GitContext helps developers quickly understand unfamiliar repositories by indexing local source code and documentation, and finding the exact files, functions, classes, and line numbers relevant to developer questions.
 
@@ -13,28 +13,57 @@ When exploring a new codebase or onboarding to a large repository, developers sp
 * *"Which function processes Stripe payments and charges customers?"*
 * *"Where is the database connection pool configured?"*
 
-Traditional search (like `grep` or standard IDE text search) either misses context or returns hundreds of raw text hits without structural meaning. GitContext parses your code into **semantic AST chunks** (functions, classes, methods) and **hierarchical documentation sections**, allowing keyword and natural-language retrieval powered by **BM25 ranking**.
+Traditional search (like `grep` or standard IDE text search) either misses context or returns hundreds of raw text hits without structural meaning. GitContext parses your code into **semantic AST chunks** (functions, classes, methods) and **hierarchical documentation sections**, retrieves context using **BM25 + Hybrid ranking**, and synthesizes answers using an **LLM-powered assistant** with strictly verified citations.
 
 ---
 
-## 🏗️ Phase 1 Architecture
+## 🏗️ System & LLM Architecture
 
-Phase 1 establishes a rock-solid, local, deterministic foundation without depending on external LLMs or cloud embeddings.
+GitContext is organized into a deterministic ingestion/indexing foundation and a secure, citation-grounded LLM synthesis pipeline.
 
 ```mermaid
 graph TD
-    A[Local Codebase] --> B[Repository Ingestion Engine]
-    B -->|Filter .gitignore, venvs, secrets| C[Discovered .py & .md Files]
-    C --> D[Chunking Engine]
-    D -->|Python AST| E[Functions, Classes & Methods]
-    D -->|Markdown Parser| F[Hierarchical Headings & Docs]
-    E --> G[Deterministic CodeChunk Models]
-    F --> G
-    G --> H[Index Storage: data/index/chunks.jsonl]
-    H --> I[BM25 Retrieval Engine]
-    J[Developer Question] --> I
-    I --> K[Top Ranked Results with Line Numbers & Previews]
+    subgraph Phase 1 & 2: Ingestion & Hybrid Retrieval
+        A[Local Repository] --> B[Ingestion Engine]
+        B -->|Filter gitignore, secrets| C[Discovered .py & .md Files]
+        C --> D[AST & Markdown Chunker]
+        D --> E[Deterministic CodeChunks]
+        E --> F[Storage: data/index/chunks.jsonl]
+        F --> G[Hybrid Retriever: BM25 + Dense RRF]
+    end
+
+    subgraph Step 3: LLM & Grounded Citation Pipeline
+        Q["Developer Question (CLI / API)"] --> G
+        G -->|Top-K Scored Results| H["Numbered Evidence Chunks [1], [2]"]
+        H --> I["Prompt Construction Engine (generation.py)"]
+        I -->|System Guardrails & Untrusted Delimiters| J["Strict Grounding Prompt"]
+        J --> K["Configurable LLM Client (llm.py)"]
+        
+        subgraph Multi-Provider Switchboard
+            K -->|OpenAI / Gemini / Anthropic / Ollama / Mock| L[LLM Response]
+        end
+        
+        L --> M["Citation Verifier & Validator (citations.py)"]
+        H --> M
+        M -->|Validate Chunk IDs & Line Ranges| N{Citation Valid?}
+        N -->|Valid [1], [2]| O["Verified Sources List"]
+        N -->|Invented [99]| P["Flag & Strip Hallucinations"]
+        
+        O --> R["Final Validated Response (assistant.py)"]
+        P --> R
+        R --> S["CLI: python -m gitcontext ask"]
+        R --> T["FastAPI REST API"]
+    end
 ```
+
+### LLM Pipeline Core Principles
+
+1. **Strict Evidence Grounding**: The LLM is instructed to answer *solely* from the provided code evidence. If the retrieved snippets do not contain the answer, the model is compelled to state `"Insufficient evidence"`.
+2. **Untrusted Data Defense (Anti-Injection)**: Retrieved code and documentation are strictly treated as **untrusted data**, wrapped in isolated delimiters. Any instructions inside code comments (e.g., *"ignore previous instructions"*) are treated purely as passive text data.
+3. **Mandatory `[1]`, `[2]` Citations**: Every claim in the generated answer must cite the corresponding evidence chunk.
+4. **Separation of Facts and Inferences**: Responses are partitioned into **Facts** (directly observed from code with citations) and **Inferences** (logical deductions or "None").
+5. **Post-Generation Citation Verification**: A deterministic citations engine parses the LLM's references, validates that the referenced chunk actually exists, checks that the file path and line numbers are valid ($1 \le \text{start\_line} \le \text{end\_line}$), and strips or flags invented citations (e.g., `[99]`).
+6. **Multi-Provider Switchboard**: Supports OpenAI, Google Gemini, Anthropic Claude, local Ollama, and Mock providers configured exclusively via environment variables (`.env`). No keys are hardcoded.
 
 ### Module Breakdown
 
@@ -44,8 +73,13 @@ graph TD
 | **Ingestion** | [`src/gitcontext/ingestion.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/ingestion.py) | Safely scans local directory trees, filters ignored/sensitive files (`.gitignore`, `.env`, `node_modules`, `venv`), and reads UTF-8 files safely. |
 | **Chunking** | [`src/gitcontext/chunking.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/chunking.py) | Uses Python AST (`ast.parse`) to extract functions and classes with 1-based line bounds; splits Markdown by heading hierarchy. |
 | **Indexing** | [`src/gitcontext/indexing.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/indexing.py) | Serializes and loads chunks to/from `data/index/chunks.jsonl` and metadata to `metadata.json`. |
-| **Retrieval** | [`src/gitcontext/retrieval.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/retrieval.py) | BM25 Okapi retriever with code-aware tokenization (splits `camelCase`, `snake_case`, and punctuation). |
-| **CLI** | [`src/gitcontext/cli.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/cli.py) | User-friendly command-line interface supporting `index`, `search`, and `status` commands. |
+| **Retrieval** | [`src/gitcontext/retrieval.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/retrieval.py) | BM25 Okapi retriever and `HybridRetriever` using Reciprocal Rank Fusion (RRF) with small-corpus fallback. |
+| **LLM Provider** | [`src/gitcontext/llm.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/llm.py) | Configurable multi-provider LLM abstraction (OpenAI, Gemini, Anthropic, Ollama, Mock) without hardcoded keys. |
+| **Generation** | [`src/gitcontext/generation.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/generation.py) | Builds grounded prompts with numbered evidence chunks, security guardrails, and calls the LLM. |
+| **Citations** | [`src/gitcontext/citations.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/citations.py) | Parses bracket citations, validates source paths and line bounds, flags or removes hallucinated references. |
+| **Assistant** | [`src/gitcontext/assistant.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/assistant.py) | Core orchestration service decoupled from CLI, returning structured responses for CLI and FastAPI. |
+| **Evaluation** | [`src/gitcontext/evaluation.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/evaluation.py) | Automated citation precision, recall, and validity rate evaluation suite. |
+| **CLI** | [`src/gitcontext/cli.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/cli.py) | Command-line interface supporting `index`, `search`, `status`, and `ask` commands. |
 
 ---
 
