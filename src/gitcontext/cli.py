@@ -9,6 +9,7 @@ from typing import Optional
 
 from gitcontext.assistant import ask_codebase
 from gitcontext.indexing import get_default_index_dir, index_repository, load_index
+from gitcontext.investigator import BugInvestigator
 from gitcontext.llm import LLMError
 from gitcontext.retrieval import search_index
 
@@ -155,6 +156,50 @@ def cmd_ask(
     return 0
 
 
+def cmd_investigate(
+    query: str,
+    repo_path_str: str = ".",
+    target_file: Optional[str] = None,
+    target_symbol: Optional[str] = None,
+    run_tests: bool = False,
+    test_path: Optional[str] = None,
+    index_dir_str: Optional[str] = None,
+    format_type: str = "terminal",
+    json_output: bool = False,
+) -> int:
+    """Handle the 'investigate' subcommand."""
+    repo_path = Path(repo_path_str)
+    if not repo_path.exists():
+        print(f"Error: Repository path does not exist: '{repo_path_str}'", file=sys.stderr)
+        return 1
+    if not repo_path.is_dir():
+        print(f"Error: Path is not a directory: '{repo_path_str}'", file=sys.stderr)
+        return 1
+
+    index_dir = Path(index_dir_str) if index_dir_str else get_default_index_dir()
+    investigator = BugInvestigator(repo_path=repo_path, index_dir=index_dir)
+
+    try:
+        report = investigator.investigate(
+            query=query,
+            target_file=target_file,
+            target_symbol=target_symbol,
+            run_tests=run_tests,
+            test_path=test_path,
+        )
+    except Exception as e:
+        print(f"Error during bug investigation: {e}", file=sys.stderr)
+        return 1
+
+    if json_output or format_type == "json":
+        import json
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.format_cli_output())
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct CLI argument parser."""
     parser = argparse.ArgumentParser(
@@ -186,6 +231,70 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("--provider", type=str, default=None, help="LLM provider (e.g. openai, gemini, anthropic, ollama, mock)")
     ask_parser.add_argument("--model", type=str, default=None, help="LLM model name")
 
+    # investigate subcommand
+    inv_parser = subparsers.add_parser(
+        "investigate",
+        help="Investigate potential bugs, test failures, and root causes with grounded citations",
+    )
+    inv_parser.add_argument(
+        "--repo",
+        "-r",
+        dest="repo_path",
+        type=str,
+        default=".",
+        help="Path to repository to investigate (default: current directory)",
+    )
+    inv_parser.add_argument(
+        "--query",
+        "-q",
+        type=str,
+        required=True,
+        help="Bug report, symptom, or error message to investigate",
+    )
+    inv_parser.add_argument(
+        "--target-file",
+        type=str,
+        default=None,
+        help="Specific repository file to inspect",
+    )
+    inv_parser.add_argument(
+        "--target-symbol",
+        type=str,
+        default=None,
+        help="Specific function or class name to trace",
+    )
+    inv_parser.add_argument(
+        "--test-path",
+        type=str,
+        default=None,
+        help="Specific test file or test node to execute",
+    )
+    inv_parser.add_argument(
+        "--run-tests",
+        action="store_true",
+        default=False,
+        help="Run tests in an isolated, timeout-guarded environment",
+    )
+    inv_parser.add_argument(
+        "--format",
+        choices=["terminal", "json"],
+        default="terminal",
+        help="Report output format (default: terminal)",
+    )
+    inv_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        default=False,
+        help="Output machine-readable JSON (alias for --format json)",
+    )
+    inv_parser.add_argument(
+        "--index-dir",
+        type=str,
+        default=None,
+        help="Custom directory containing codebase index",
+    )
+
     return parser
 
 
@@ -207,6 +316,18 @@ def main(argv: Optional[list[str]] = None) -> int:
             index_dir_str=args.index_dir,
             provider=args.provider,
             model=args.model,
+        )
+    elif args.command == "investigate":
+        return cmd_investigate(
+            query=args.query,
+            repo_path_str=args.repo_path,
+            target_file=args.target_file,
+            target_symbol=args.target_symbol,
+            run_tests=args.run_tests,
+            test_path=args.test_path,
+            index_dir_str=args.index_dir,
+            format_type=args.format,
+            json_output=args.json_output,
         )
     else:
         parser.print_help()

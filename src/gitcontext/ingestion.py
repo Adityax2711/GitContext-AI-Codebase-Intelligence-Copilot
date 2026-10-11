@@ -54,6 +54,16 @@ DEFAULT_IGNORED_PATTERNS: Set[str] = {
 SUPPORTED_EXTENSIONS: Set[str] = {".py", ".md", ".markdown"}
 
 
+def should_ignore_dir(dir_name: str) -> bool:
+    """Check if directory name matches standard ignored directory names."""
+    return dir_name in DEFAULT_IGNORED_DIRS or dir_name.endswith(".egg-info")
+
+
+def should_ignore_file(file_name: str) -> bool:
+    """Check if file name matches default ignored patterns."""
+    return any(fnmatch.fnmatch(file_name, pat) for pat in DEFAULT_IGNORED_PATTERNS)
+
+
 class GitIgnoreFilter:
     """Parses and matches .gitignore rules against repository file paths."""
 

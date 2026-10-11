@@ -6,6 +6,16 @@ from gitcontext.generation import GenerationResult, generate_answer
 from gitcontext.llm import LLMClient, LLMError, MissingAPIKeyError, get_llm_client
 from gitcontext.models import CodeChunk, IndexMetadata, SearchResult
 
+from gitcontext.bug_models import (
+    BugFinding,
+    BugInvestigationReport,
+    CallTraceInfo,
+    StaticAnalysisFinding,
+    TestExecutionSummary,
+    TestFailure,
+)
+from gitcontext.investigator import BugInvestigator, investigate_codebase
+
 __version__ = "0.2.0"
 
 __all__ = [
@@ -24,4 +34,12 @@ __all__ = [
     "AssistantResponse",
     "CodeAssistant",
     "ask_codebase",
+    "BugFinding",
+    "BugInvestigationReport",
+    "CallTraceInfo",
+    "StaticAnalysisFinding",
+    "TestExecutionSummary",
+    "TestFailure",
+    "BugInvestigator",
+    "investigate_codebase",
 ]

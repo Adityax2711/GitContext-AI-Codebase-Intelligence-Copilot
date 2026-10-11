@@ -8,7 +8,6 @@ from gitcontext.cli import main
 def test_cli_index_and_search_workflow(tmp_path: Path, capsys: pytest.CaptureFixture):
     repo_dir = tmp_path / "toy_repo"
     repo_dir.mkdir()
-
     py_file = repo_dir / "greeter.py"
     py_file.write_text(
         "def say_hello(name: str) -> str:\n    return f'Hello, {name}!'\n"

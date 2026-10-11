@@ -78,8 +78,11 @@ graph TD
 | **Generation** | [`src/gitcontext/generation.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/generation.py) | Builds grounded prompts with numbered evidence chunks, security guardrails, and calls the LLM. |
 | **Citations** | [`src/gitcontext/citations.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/citations.py) | Parses bracket citations, validates source paths and line bounds, flags or removes hallucinated references. |
 | **Assistant** | [`src/gitcontext/assistant.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/assistant.py) | Core orchestration service decoupled from CLI, returning structured responses for CLI and FastAPI. |
+| **Bug Models** | [`src/gitcontext/bug_models.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/bug_models.py) | Pydantic models for structured findings, severity/confidence rationales, test summaries, and reports. |
+| **Investigation Tools** | [`src/gitcontext/tools/`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/tools/) | Reusable tools: `RepoInspector` (safe file & symbol read), `DependencyTracer` (AST callers), `StaticAnalyzer` (Ruff/AST), `TestRunner` (isolated pytest). |
+| **Investigator** | [`src/gitcontext/investigator.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/investigator.py) | Step 4 orchestration engine combining retrieval, AST tracing, static linting, and isolated test execution. |
 | **Evaluation** | [`src/gitcontext/evaluation.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/evaluation.py) | Automated citation precision, recall, and validity rate evaluation suite. |
-| **CLI** | [`src/gitcontext/cli.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/cli.py) | Command-line interface supporting `index`, `search`, `status`, and `ask` commands. |
+| **CLI** | [`src/gitcontext/cli.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/cli.py) | Command-line interface supporting `index`, `search`, `status`, `ask`, and `investigate` commands. |
 
 ---
 
@@ -223,6 +226,63 @@ cp .env.example .env
 
 ---
 
+### 5. Investigate Bugs with Grounded Root Cause Analysis (Step 4)
+Run automated investigations across code, call trees, static analyzers (Ruff & AST), and isolated pytest execution:
+
+```bash
+python -m gitcontext investigate --repo fixtures/synthetic_bug_repo --query "Investigate zero division in divide_numbers" --run-tests
+```
+
+**Expected Output:**
+```text
+==============================================================================
+GITCONTEXT BUG INVESTIGATION REPORT
+==============================================================================
+Query      : Investigate zero division in divide_numbers
+Repository : fixtures/synthetic_bug_repo
+Summary    : Investigation completed: 5 finding(s) identified (1 reproduced, 4 suspected).
+------------------------------------------------------------------------------
+[TEST EXECUTION - ISOLATED RUN]:
+  Total: 2 | Passed: 1 | Failed: 1 | Errors: 0
+  [1] test_divide_zero_division_failing (ZeroDivisionError): float division by zero
+      Traceback points to: math_ops.py:L11 (divide_numbers)
+------------------------------------------------------------------------------
+[STATIC ANALYSIS FINDINGS] (10 detected):
+  [RUFF:UP035] math_ops.py:L3-L3 - `typing.List` is deprecated, use `list` instead
+  [AST_INSPECTOR:AST:ZERO_DIVISION] math_ops.py:L17-L17 - Division, floor division, or modulo by literal zero detected.
+------------------------------------------------------------------------------
+[IDENTIFIED BUG FINDINGS] (5):
+
+[1] BUG-001: Test failure: test_divide_zero_division_failing raised ZeroDivisionError
+    Category      : zero_division
+    Severity      : HIGH (Verified by executing automated test suite in isolated environment.)
+    Confidence    : HIGH (High confidence: Defect was directly reproduced by test runner and localized via stack trace.)
+    Evidence Type : test_failure
+    Location      : math_ops.py:L9-L13
+    Status        : REPRODUCED
+    Root Cause    : Unhandled condition in divide_numbers triggered by test input.
+    Expected      : Test test_divide_zero_division_failing should pass without raising unhandled ZeroDivisionError.
+    Observed      : ZeroDivisionError: float division by zero
+    Fix Direction : Implement input validation or guard clause handling the failing edge case.
+    Next Step     : Inspect variables leading to math_ops.py:L11 during test execution.
+    Reproduction  :
+      - Run test suite: pytest tests/test_math.py
+      - Observe ZeroDivisionError at line 11
+
+------------------------------------------------------------------------------
+[GROUNDED SOURCE CITATIONS]:
+  [1] math_ops.py:L9-L13 (divide_numbers)
+  [2] math_ops.py:L17-L17 (AST:ZERO_DIVISION)
+==============================================================================
+```
+
+Output machine-readable JSON:
+```bash
+python -m gitcontext investigate --repo fixtures/synthetic_bug_repo --query "Investigate zero division" --run-tests --json
+```
+
+---
+
 ## 🧪 Running Automated Tests
 
 Run the full test suite with `pytest`:
@@ -231,7 +291,7 @@ Run the full test suite with `pytest`:
 pytest -v
 ```
 
-All 31 unit and integration tests cover:
+All 40 unit and integration tests cover:
 - Python function and class AST extraction with line numbers
 - Markdown hierarchical heading section chunking
 - Deterministic chunk hashing & ID generation
@@ -243,7 +303,14 @@ All 31 unit and integration tests cover:
 - Citation verification, invalid citation stripping, and line-range validation
 - Error handling: missing API keys, empty retrieval, and LLM provider failures
 - Grounded citation evaluation suite benchmarking precision and recall
-- CLI subcommands (`index`, `search`, `status`, `ask`)
+- **Step 4 Repository Inspection**: Safe file reading, bounds accuracy, and strict path traversal defense
+- **Step 4 AST Dependency Tracing**: Caller and callee discovery, cross-module tracking, ambiguity flags
+- **Step 4 Static Analysis**: Ruff diagnostic parser and deterministic AST defect inspections
+- **Step 4 Isolated Test Execution**: Subprocess sandboxing, environment sanitation, and stack trace correlation
+- **Step 4 Schema Validation**: Pydantic typed models, confidence/severity justifications, JSON round-tripping
+- **Step 4 False-Positive Resilience**: Verifying that clean code is not incorrectly flagged as buggy
+- **Step 4 Limit & Timeout Guards**: Subprocess timeouts and bounded investigation loops
+- CLI subcommands (`index`, `search`, `status`, `ask`, `investigate`)
 
 ---
 
@@ -252,6 +319,6 @@ All 31 unit and integration tests cover:
 * ✅ **Phase 1 — AST Chunking & BM25 Search**: Structural code parsing and keyword retrieval.
 * ✅ **Phase 2 — Hybrid Retrieval**: Reciprocal Rank Fusion combining lexical and dense search.
 * ✅ **Step 3 — LLM-Powered Citation Assistant**: Grounded answer synthesis, citation validation, and CLI `ask`.
-* **Phase 4 — Live Synchronization**: Automatically keep index up to date as commits are pushed.
-* **Phase 5 — FastAPI Backend & Web UI**: REST API and interactive interface with code highlighting.
+* ✅ **Step 4 — Bug Investigation Agent**: Multi-tool investigation, AST tracing, Ruff/AST static analysis, isolated pytest runner, and Pydantic bug reports.
+* **Step 5 — AI Fix Proposals & Verification**: Isolated patch generation, dry-run diffs, and regression re-testing.
 
