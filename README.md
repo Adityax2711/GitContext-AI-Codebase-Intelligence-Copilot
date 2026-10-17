@@ -73,6 +73,9 @@ graph TD
 | Module | Location | Purpose |
 |---|---|---|
 | **Models** | [`src/gitcontext/models.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/models.py) | Defines `CodeChunk`, `SearchResult`, and `IndexMetadata` dataclasses with SHA-256 deterministic IDs and test source typing. |
+| **URL Validator** | [`src/gitcontext/url_validator.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/url_validator.py) | Canonical repository URL parser, normalizer, and validator rejecting user profile, issue, and PR sub-paths with explicit guidance. |
+| **Database** | [`src/gitcontext/db.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/db.py) | Thread-safe SQLite persistence layer (WAL mode) storing users, sessions, repositories, indexing jobs, and fix proposals. |
+| **Authentication** | [`src/gitcontext/auth.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/auth.py) | PBKDF2 password hashing, session token lifecycle, GitHub OAuth authorization flow, and safe account linking with takeover prevention. |
 | **Ingestion** | [`src/gitcontext/ingestion.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/ingestion.py) | Safely scans local directory trees, filters ignored/sensitive files (`.gitignore`, `.env`, `node_modules`, `venv`), and reads UTF-8 files safely. |
 | **GitHub Service** | [`src/gitcontext/github_service.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/github_service.py) | GitHub authentication (PAT/OAuth), repository discovery, and dual-strategy clone / API zipball archive downloader. |
 | **Chunking** | [`src/gitcontext/chunking.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/chunking.py) | Uses Python AST (`ast.parse`) to extract functions, classes, and test cases with 1-based line bounds; splits Markdown by heading hierarchy. |
@@ -310,7 +313,7 @@ Run the full test suite with `pytest`:
 pytest -v
 ```
 
-All 68 unit, integration, and end-to-end tests cover:
+All 77 unit, integration, and end-to-end tests cover:
 - Python function and class AST extraction with 1-based line bounds
 - Test file detection and test chunk categorization (`source_type="test"`)
 - Markdown hierarchical heading section chunking
@@ -320,7 +323,10 @@ All 68 unit, integration, and end-to-end tests cover:
 - BM25 ranking and camelCase / snake_case tokenization
 - **Dense Qdrant Vector Store**: FastEmbed `BAAI/bge-small-en-v1.5`, modern `query_points` API, collection management, and offline fallback
 - **Hybrid Retrieval**: Reciprocal Rank Fusion (RRF) blending BM25 lexical and Qdrant dense vector rankings
-- **GitHub Service**: Authentication, repository discovery, authenticated git clone, and API zipball archive downloader
+- **Canonical URL Validator**: Path segment validation, trailing slashes, `.git` suffixes, and clear rejection of profiles, issues, and PRs
+- **User Authentication & Passwords**: Salted PBKDF2 hashing (100k rounds), session token issuance, validation, and expiration
+- **GitHub OAuth & Account Linking**: Anti-CSRF state token validation, token exchange, account takeover defense, safe disconnect
+- **Database Persistence**: Automatic SQLite schema initialization (WAL mode), repository records, and indexing job tracking
 - **GitHub REST API**: Login, logout, user profile, repo listing, and 1-click import endpoints
 - LLM generation with prompt injection defenses and strict grounding
 - Citation verification, invalid citation stripping, and line-range validation (`1 <= start_line <= end_line`)
@@ -340,6 +346,8 @@ All 68 unit, integration, and end-to-end tests cover:
 * ✅ **Phase 4 — Bug Investigation Agent**: Multi-tool autonomous agent (`RepoInspector`, `DependencyTracer`, `StaticAnalyzer`, `TestRunner`), AST call graph analysis, Ruff & AST rule linting, isolated pytest runner, and Pydantic bug reports.
 * ✅ **Phase 5 — AI Fix Proposals & Patch Manager**: Synthesizes verified unified diffs, syntax validation, sandboxed test verification, safe file application with `.bak` backups, and rollback capabilities.
 * ✅ **Phase 6 — Full-Stack Web Workspace & GitHub Integration**: React 19 + TypeScript Copilot workspace, monaco-style code viewer, diff review, interactive GitHub authentication modal, repository browser, and 1-click cloud repository import.
+* ✅ **Phase 7 — User Authentication & Account Linking**: Email registration and sign-in with salted cryptographic PBKDF2 hashing, session tokens, GitHub OAuth authorization flow, and account-takeover protection.
+* ✅ **Phase 8 — Database Persistence & Robust URL Validation**: SQLite database layer (WAL mode), indexing job tracking, and shared repository URL validation engine.
 
 ---
 
@@ -387,8 +395,17 @@ Open [http://localhost:8000](http://localhost:8000) in your browser. The single-
 | `/api/test/run` | `POST` | Run isolated test suite and parse failures. |
 | `/api/search` | `GET` | BM25 + dense hybrid search with Reciprocal Rank Fusion. |
 | `/api/symbols` | `GET` | AST function and class symbol finder. |
+| `/api/auth/register` | `POST` | Register a new user account with email and password. |
+| `/api/auth/login` | `POST` | Authenticate user with email and password, returning session token. |
+| `/api/auth/logout` | `POST` | Invalidate current user session token. |
+| `/api/auth/me` | `GET` | Retrieve authenticated user profile and linked GitHub identity. |
+| `/api/auth/github/start` | `GET` | Generate anti-CSRF state token and initiate GitHub OAuth authorization. |
+| `/api/auth/github/callback` | `GET` | Handle GitHub OAuth callback, exchange code, link account, and redirect. |
+| `/api/auth/github/link-token` | `POST` | Connect GitHub account via Personal Access Token for active user. |
+| `/api/auth/github/disconnect` | `POST` | Disconnect GitHub identity from account with lockout safeguard. |
+| `/api/github/validate-url` | `POST` | Validate repository URL/identifier and return canonical owner and repo. |
 | `/api/github/user` | `GET` | Retrieve authenticated GitHub user identity and avatar. |
 | `/api/github/login` | `POST` | Authenticate with GitHub using a Personal Access Token (PAT). |
 | `/api/github/logout` | `POST` | Discard active GitHub session credentials. |
 | `/api/github/repos` | `GET` | List accessible personal and organization repositories. |
-| `/api/github/import` | `POST` | Clone or download (dual-strategy) a GitHub repo into workspace and index it. |
+| `/api/github/import` | `POST` | Clone or download GitHub repo, record in database, and index into RAG. |
