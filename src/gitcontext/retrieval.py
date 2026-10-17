@@ -154,7 +154,8 @@ class HybridRetriever:
                 dense_results = self.vector_store.search(query, self.chunks, top_k=min(top_k * 3, len(self.chunks)))
                 for rank, res in enumerate(dense_results, start=1):
                     cid = res.chunk.chunk_id
-                    rrf_scores[cid] = rrf_scores.get(cid, 0.0) + (1.0 / (self.rrf_k + rank))
+                    if cid in chunk_map:
+                        rrf_scores[cid] = rrf_scores.get(cid, 0.0) + (1.0 / (self.rrf_k + rank))
             except Exception:
                 pass
 
@@ -162,14 +163,17 @@ class HybridRetriever:
         sorted_chunks = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
 
         results: List[SearchResult] = []
-        for rank, (cid, score) in enumerate(sorted_chunks[:top_k], start=1):
-            results.append(
-                SearchResult(
-                    chunk=chunk_map[cid],
-                    score=float(score),
-                    rank=rank,
+        for cid, score in sorted_chunks:
+            if cid in chunk_map:
+                results.append(
+                    SearchResult(
+                        chunk=chunk_map[cid],
+                        score=float(score),
+                        rank=len(results) + 1,
+                    )
                 )
-            )
+            if len(results) >= top_k:
+                break
 
         return results
 

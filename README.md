@@ -19,70 +19,76 @@ Traditional search (like `grep` or standard IDE text search) either misses conte
 
 ## 🏗️ System & LLM Architecture
 
-GitContext is organized into a deterministic ingestion/indexing foundation and a secure, citation-grounded LLM synthesis pipeline.
+GitContext is organized into a deterministic ingestion/indexing foundation, hybrid RAG retrieval, autonomous agent investigation, and a secure, citation-grounded LLM synthesis pipeline.
 
 ```mermaid
 graph TD
-    subgraph Phase 1 & 2: Ingestion & Hybrid Retrieval
-        A[Local Repository] --> B[Ingestion Engine]
-        B -->|Filter gitignore, secrets| C[Discovered .py & .md Files]
-        C --> D[AST & Markdown Chunker]
-        D --> E[Deterministic CodeChunks]
-        E --> F[Storage: data/index/chunks.jsonl]
-        F --> G[Hybrid Retriever: BM25 + Dense RRF]
+    subgraph Ingestion and Storage
+        GH["GitHub URL / Repository"] -->|"PAT Auth / Git Clone / Zipball"| GHService["GitHub Service"]
+        GHService --> Ingest["Ingestion Engine"]
+        Local["Local Repository"] --> Ingest
+        Ingest -->|"Filter gitignore, secrets"| Files["Discovered .py and .md Files"]
+        Files --> Chunker["AST and Markdown Chunker"]
+        Chunker --> Chunks["CodeChunks: Code, Tests, Docs"]
+        Chunks --> Qdrant[("Qdrant Vector Store: 384-dim")]
+        Chunks --> Disk[("JSONL Archive: chunks.jsonl")]
     end
 
-    subgraph Step 3: LLM & Grounded Citation Pipeline
-        Q["Developer Question (CLI / API)"] --> G
-        G -->|Top-K Scored Results| H["Numbered Evidence Chunks [1], [2]"]
-        H --> I["Prompt Construction Engine (generation.py)"]
-        I -->|System Guardrails & Untrusted Delimiters| J["Strict Grounding Prompt"]
-        J --> K["Configurable LLM Client (llm.py)"]
-        
-        subgraph Multi-Provider Switchboard
-            K -->|OpenAI / Gemini / Anthropic / Ollama / Mock| L[LLM Response]
-        end
-        
-        L --> M["Citation Verifier & Validator (citations.py)"]
-        H --> M
-        M -->|Validate Chunk IDs & Line Ranges| N{Citation Valid?}
-        N -->|Valid [1], [2]| O["Verified Sources List"]
-        N -->|Invented [99]| P["Flag & Strip Hallucinations"]
-        
-        O --> R["Final Validated Response (assistant.py)"]
-        P --> R
-        R --> S["CLI: python -m gitcontext ask"]
-        R --> T["FastAPI REST API"]
+    subgraph Hybrid Retrieval and Grounding
+        Query["Query / Question"] --> Hybrid["Hybrid Retriever: BM25 + Qdrant RRF"]
+        Qdrant --> Hybrid
+        Disk --> Hybrid
+        Hybrid -->|"Top-K Evidence"| Grounding["Numbered Grounded Chunks"]
+        Grounding --> Prompt["Prompt Construction Engine"]
+        Prompt --> LLM["LLM Provider: OpenAI / Gemini / Claude / Mock"]
+        LLM --> CitationVerifier["Citation Verifier: citations.py"]
+        Grounding --> CitationVerifier
+        CitationVerifier -->|"Valid Grounded Citations"| VerifiedAns["Verified Grounded Answer"]
+        CitationVerifier -->|"Invented Citations"| StripH["Strip and Flag Hallucinations"]
+    end
+
+    subgraph Investigation and Copilot Workspace
+        VerifiedAns --> WebUI["React 19 Copilot Workspace"]
+        VerifiedAns --> CLI["GitContext CLI"]
+        Investigator["Bug Investigator Agent"] --> Tools["RepoInspector + DependencyTracer + StaticAnalyzer + TestRunner"]
+        Tools --> Pytest[("Isolated Pytest Sandbox")]
+        Investigator --> PatchManager["Patch Manager: Unified Diffs and Rollback"]
+        PatchManager --> WebUI
     end
 ```
+
+> 📘 **Full Architecture Deep-Dive**: For detailed component interactions, data flow diagrams, and threat models, see the complete [System & LLM Architecture Specification](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/ARCHITECTURE.md).
 
 ### LLM Pipeline Core Principles
 
 1. **Strict Evidence Grounding**: The LLM is instructed to answer *solely* from the provided code evidence. If the retrieved snippets do not contain the answer, the model is compelled to state `"Insufficient evidence"`.
 2. **Untrusted Data Defense (Anti-Injection)**: Retrieved code and documentation are strictly treated as **untrusted data**, wrapped in isolated delimiters. Any instructions inside code comments (e.g., *"ignore previous instructions"*) are treated purely as passive text data.
-3. **Mandatory `[1]`, `[2]` Citations**: Every claim in the generated answer must cite the corresponding evidence chunk.
+3. **Mandatory Citations**: Every claim in the generated answer must cite the corresponding evidence chunk (e.g. `[1]`, `[2]`).
 4. **Separation of Facts and Inferences**: Responses are partitioned into **Facts** (directly observed from code with citations) and **Inferences** (logical deductions or "None").
-5. **Post-Generation Citation Verification**: A deterministic citations engine parses the LLM's references, validates that the referenced chunk actually exists, checks that the file path and line numbers are valid ($1 \le \text{start\_line} \le \text{end\_line}$), and strips or flags invented citations (e.g., `[99]`).
+5. **Post-Generation Citation Verification**: A deterministic citations engine parses the LLM's references, validates that the referenced chunk actually exists, checks that the file path and line numbers are valid (`1 <= start_line <= end_line`), and strips or flags invented citations (e.g., `[99]`).
 6. **Multi-Provider Switchboard**: Supports OpenAI, Google Gemini, Anthropic Claude, local Ollama, and Mock providers configured exclusively via environment variables (`.env`). No keys are hardcoded.
 
 ### Module Breakdown
 
 | Module | Location | Purpose |
 |---|---|---|
-| **Models** | [`src/gitcontext/models.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/models.py) | Defines `CodeChunk`, `SearchResult`, and `IndexMetadata` dataclasses with SHA-256 deterministic IDs. |
+| **Models** | [`src/gitcontext/models.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/models.py) | Defines `CodeChunk`, `SearchResult`, and `IndexMetadata` dataclasses with SHA-256 deterministic IDs and test source typing. |
 | **Ingestion** | [`src/gitcontext/ingestion.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/ingestion.py) | Safely scans local directory trees, filters ignored/sensitive files (`.gitignore`, `.env`, `node_modules`, `venv`), and reads UTF-8 files safely. |
-| **Chunking** | [`src/gitcontext/chunking.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/chunking.py) | Uses Python AST (`ast.parse`) to extract functions and classes with 1-based line bounds; splits Markdown by heading hierarchy. |
-| **Indexing** | [`src/gitcontext/indexing.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/indexing.py) | Serializes and loads chunks to/from `data/index/chunks.jsonl` and metadata to `metadata.json`. |
-| **Retrieval** | [`src/gitcontext/retrieval.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/retrieval.py) | BM25 Okapi retriever and `HybridRetriever` using Reciprocal Rank Fusion (RRF) with small-corpus fallback. |
+| **GitHub Service** | [`src/gitcontext/github_service.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/github_service.py) | GitHub authentication (PAT/OAuth), repository discovery, and dual-strategy clone / API zipball archive downloader. |
+| **Chunking** | [`src/gitcontext/chunking.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/chunking.py) | Uses Python AST (`ast.parse`) to extract functions, classes, and test cases with 1-based line bounds; splits Markdown by heading hierarchy. |
+| **Indexing** | [`src/gitcontext/indexing.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/indexing.py) | Serializes and loads chunks to/from `data/index/chunks.jsonl` and metadata to `metadata.json`, and coordinates Qdrant indexing. |
+| **Vector Store** | [`src/gitcontext/vector_store.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/vector_store.py) | Dense vector store powered by Qdrant (`query_points`) and FastEmbed (`BAAI/bge-small-en-v1.5`) with offline deterministic fallback. |
+| **Retrieval** | [`src/gitcontext/retrieval.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/retrieval.py) | BM25 Okapi retriever and `HybridRetriever` using Reciprocal Rank Fusion (RRF) combining lexical and dense search. |
 | **LLM Provider** | [`src/gitcontext/llm.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/llm.py) | Configurable multi-provider LLM abstraction (OpenAI, Gemini, Anthropic, Ollama, Mock) without hardcoded keys. |
 | **Generation** | [`src/gitcontext/generation.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/generation.py) | Builds grounded prompts with numbered evidence chunks, security guardrails, and calls the LLM. |
 | **Citations** | [`src/gitcontext/citations.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/citations.py) | Parses bracket citations, validates source paths and line bounds, flags or removes hallucinated references. |
-| **Assistant** | [`src/gitcontext/assistant.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/assistant.py) | Core orchestration service decoupled from CLI, returning structured responses for CLI and FastAPI. |
+| **Assistant** | [`src/gitcontext/assistant.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/assistant.py) | Core orchestration service decoupled from CLI, returning structured responses for CLI and FastAPI with hybrid RAG. |
 | **Bug Models** | [`src/gitcontext/bug_models.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/bug_models.py) | Pydantic models for structured findings, severity/confidence rationales, test summaries, and reports. |
 | **Investigation Tools** | [`src/gitcontext/tools/`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/tools/) | Reusable tools: `RepoInspector` (safe file & symbol read), `DependencyTracer` (AST callers), `StaticAnalyzer` (Ruff/AST), `TestRunner` (isolated pytest). |
 | **Investigator** | [`src/gitcontext/investigator.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/investigator.py) | Step 4 orchestration engine combining retrieval, AST tracing, static linting, and isolated test execution. |
+| **Patch Manager** | [`src/gitcontext/agent/patch_manager.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/agent/patch_manager.py) | Unified diff construction, syntax validation, file application, and automatic `.bak` rollback. |
 | **Evaluation** | [`src/gitcontext/evaluation.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/evaluation.py) | Automated citation precision, recall, and validity rate evaluation suite. |
-| **CLI** | [`src/gitcontext/cli.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/cli.py) | Command-line interface supporting `index`, `search`, `status`, `ask`, and `investigate` commands. |
+| **CLI** | [`src/gitcontext/cli.py`](file:///c:/Users/Aditya%20Raj/OneDrive/Documents/Desktop/Git%20Context/src/gitcontext/cli.py) | Command-line interface supporting `index`, `search`, `status`, `ask`, `investigate`, `import-repo`, and `serve`. |
 
 ---
 
@@ -283,6 +289,19 @@ python -m gitcontext investigate --repo fixtures/synthetic_bug_repo --query "Inv
 
 ---
 
+### 6. Import Repository from GitHub
+Import and automatically index any public or private GitHub repository using Git or the GitHub REST API:
+
+```bash
+# Import a public repository via URL
+python -m gitcontext import-repo https://github.com/pallets/flask --branch main
+
+# Import using owner/repo syntax with a Personal Access Token (for private repos)
+python -m gitcontext import-repo octocat/Hello-World --token ghp_yourPersonalAccessToken
+```
+
+---
+
 ## 🧪 Running Automated Tests
 
 Run the full test suite with `pytest`:
@@ -291,38 +310,40 @@ Run the full test suite with `pytest`:
 pytest -v
 ```
 
-All 40 unit and integration tests cover:
-- Python function and class AST extraction with line numbers
+All 68 unit, integration, and end-to-end tests cover:
+- Python function and class AST extraction with 1-based line bounds
+- Test file detection and test chunk categorization (`source_type="test"`)
 - Markdown hierarchical heading section chunking
-- Deterministic chunk hashing & ID generation
-- `.gitignore` and sensitive file exclusions (`.env`, `credentials.json`)
-- Syntax error resilience
+- Deterministic chunk hashing & SHA-256 ID generation
+- `.gitignore` and sensitive file exclusions (`.env`, `credentials.json`, `node_modules`)
+- Syntax error resilience & UTF-8 decoding fallback
 - BM25 ranking and camelCase / snake_case tokenization
-- Hybrid retrieval with Reciprocal Rank Fusion
+- **Dense Qdrant Vector Store**: FastEmbed `BAAI/bge-small-en-v1.5`, modern `query_points` API, collection management, and offline fallback
+- **Hybrid Retrieval**: Reciprocal Rank Fusion (RRF) blending BM25 lexical and Qdrant dense vector rankings
+- **GitHub Service**: Authentication, repository discovery, authenticated git clone, and API zipball archive downloader
+- **GitHub REST API**: Login, logout, user profile, repo listing, and 1-click import endpoints
 - LLM generation with prompt injection defenses and strict grounding
-- Citation verification, invalid citation stripping, and line-range validation
+- Citation verification, invalid citation stripping, and line-range validation (`1 <= start_line <= end_line`)
 - Error handling: missing API keys, empty retrieval, and LLM provider failures
 - Grounded citation evaluation suite benchmarking precision and recall
-- **Step 4 Repository Inspection**: Safe file reading, bounds accuracy, and strict path traversal defense
-- **Step 4 AST Dependency Tracing**: Caller and callee discovery, cross-module tracking, ambiguity flags
-- **Step 4 Static Analysis**: Ruff diagnostic parser and deterministic AST defect inspections
-- **Step 4 Isolated Test Execution**: Subprocess sandboxing, environment sanitation, and stack trace correlation
-- **Step 4 Schema Validation**: Pydantic typed models, confidence/severity justifications, JSON round-tripping
-- **Step 4 False-Positive Resilience**: Verifying that clean code is not incorrectly flagged as buggy
-- **Step 4 Limit & Timeout Guards**: Subprocess timeouts and bounded investigation loops
-- CLI subcommands (`index`, `search`, `status`, `ask`, `investigate`)
+- **Bug Investigation Tools**: `RepoInspector` (safe file reading & path traversal defense), `DependencyTracer` (call graphs), `StaticAnalyzer` (Ruff/AST), `TestRunner` (isolated pytest)
+- **Patch Manager**: Unified diff generation, syntax verification, `.bak` file backups, and safe rollback
+- CLI subcommands (`index`, `search`, `status`, `ask`, `investigate`, `import-repo`, `serve`)
 
 ---
 
-## 🔮 Roadmap & Next Milestones
+## 🔮 Roadmap & Architecture Milestones
 
-* ✅ **Phase 1 — AST Chunking & BM25 Search**: Structural code parsing and keyword retrieval.
-* ✅ **Step 4 — Bug Investigation Agent**: Multi-tool investigation, AST tracing, Ruff/AST static analysis, isolated pytest runner, and Pydantic bug reports.
-* ✅ **Step 5 — AI Fix Proposals & Web Copilot Workspace**: Interactive React+TypeScript workspace, multi-step autonomous agent, unified diff viewer, sandboxed test verification, accept/reject controls, and FastAPI server.
+* ✅ **Phase 1 — Core Engine**: Structural AST parsing (functions, classes), Markdown hierarchical chunking, deterministic SHA-256 chunk hashing, and safe UTF-8 ingestion with `.gitignore` and security exclusions.
+* ✅ **Phase 2 — Dense Vector Search & Hybrid RAG**: Qdrant vector store (`query_points`), FastEmbed embedding model (`BAAI/bge-small-en-v1.5`), BM25 Okapi lexical retrieval, Reciprocal Rank Fusion (RRF), and test-aware chunk tagging.
+* ✅ **Phase 3 — Grounded LLM Synthesis & Citation Verification**: Multi-provider switchboard (OpenAI, Gemini, Anthropic, Ollama, Mock), strict anti-injection prompt guardrails, and deterministic post-generation citation verification (`1 <= start_line <= end_line`).
+* ✅ **Phase 4 — Bug Investigation Agent**: Multi-tool autonomous agent (`RepoInspector`, `DependencyTracer`, `StaticAnalyzer`, `TestRunner`), AST call graph analysis, Ruff & AST rule linting, isolated pytest runner, and Pydantic bug reports.
+* ✅ **Phase 5 — AI Fix Proposals & Patch Manager**: Synthesizes verified unified diffs, syntax validation, sandboxed test verification, safe file application with `.bak` backups, and rollback capabilities.
+* ✅ **Phase 6 — Full-Stack Web Workspace & GitHub Integration**: React 19 + TypeScript Copilot workspace, monaco-style code viewer, diff review, interactive GitHub authentication modal, repository browser, and 1-click cloud repository import.
 
 ---
 
-## 🌐 Web Workspace & Copilot Interface (Step 5)
+## 🌐 Web Workspace & Copilot Interface
 
 GitContext includes a full-featured web-based coding assistant workspace inspired by GitHub Copilot.
 
@@ -366,5 +387,8 @@ Open [http://localhost:8000](http://localhost:8000) in your browser. The single-
 | `/api/test/run` | `POST` | Run isolated test suite and parse failures. |
 | `/api/search` | `GET` | BM25 + dense hybrid search with Reciprocal Rank Fusion. |
 | `/api/symbols` | `GET` | AST function and class symbol finder. |
-
-
+| `/api/github/user` | `GET` | Retrieve authenticated GitHub user identity and avatar. |
+| `/api/github/login` | `POST` | Authenticate with GitHub using a Personal Access Token (PAT). |
+| `/api/github/logout` | `POST` | Discard active GitHub session credentials. |
+| `/api/github/repos` | `GET` | List accessible personal and organization repositories. |
+| `/api/github/import` | `POST` | Clone or download (dual-strategy) a GitHub repo into workspace and index it. |
