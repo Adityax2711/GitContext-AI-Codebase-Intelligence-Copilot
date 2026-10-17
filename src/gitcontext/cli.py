@@ -295,7 +295,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Custom directory containing codebase index",
     )
 
+    # Subcommand: serve
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Launch the GitContext Copilot FastAPI backend and web workspace",
+    )
+    serve_parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="Host interface to bind (default: 127.0.0.1)",
+    )
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port number to listen on (default: 8000)",
+    )
+
     return parser
+
+
+def cmd_serve(host: str = "127.0.0.1", port: int = 8000) -> int:
+    """Handle the 'serve' subcommand."""
+    print(f"Starting GitContext Copilot server at http://{host}:{port} ...")
+    from gitcontext.server.app import start_server
+
+    start_server(host=host, port=port)
+    return 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -329,6 +356,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             format_type=args.format,
             json_output=args.json_output,
         )
+    elif args.command == "serve":
+        return cmd_serve(host=args.host, port=args.port)
     else:
         parser.print_help()
         return 0

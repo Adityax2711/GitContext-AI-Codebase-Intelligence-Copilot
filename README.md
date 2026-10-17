@@ -317,8 +317,54 @@ All 40 unit and integration tests cover:
 ## 🔮 Roadmap & Next Milestones
 
 * ✅ **Phase 1 — AST Chunking & BM25 Search**: Structural code parsing and keyword retrieval.
-* ✅ **Phase 2 — Hybrid Retrieval**: Reciprocal Rank Fusion combining lexical and dense search.
-* ✅ **Step 3 — LLM-Powered Citation Assistant**: Grounded answer synthesis, citation validation, and CLI `ask`.
 * ✅ **Step 4 — Bug Investigation Agent**: Multi-tool investigation, AST tracing, Ruff/AST static analysis, isolated pytest runner, and Pydantic bug reports.
-* **Step 5 — AI Fix Proposals & Verification**: Isolated patch generation, dry-run diffs, and regression re-testing.
+* ✅ **Step 5 — AI Fix Proposals & Web Copilot Workspace**: Interactive React+TypeScript workspace, multi-step autonomous agent, unified diff viewer, sandboxed test verification, accept/reject controls, and FastAPI server.
+
+---
+
+## 🌐 Web Workspace & Copilot Interface (Step 5)
+
+GitContext includes a full-featured web-based coding assistant workspace inspired by GitHub Copilot.
+
+### Launch the Workspace:
+
+#### Option 1: Full-Stack FastAPI Production Server
+```bash
+python -m gitcontext serve --port 8000
+```
+Open [http://localhost:8000](http://localhost:8000) in your browser. The single-page React frontend is automatically served by FastAPI.
+
+#### Option 2: Live Development Mode
+1. **Start FastAPI Backend:**
+   ```bash
+   python -m gitcontext serve --port 8000
+   ```
+2. **Start Vite Dev Server with HMR:**
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+   Open [http://localhost:5173](http://localhost:5173).
+
+---
+
+## 🛠️ FastAPI REST API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/status` | `GET` | System health, active repository info, index metrics, and LLM configuration. |
+| `/api/repositories` | `GET` | List available workspaces and fixtures (`synthetic_bug_repo`, etc.). |
+| `/api/repository/select` | `POST` | Switch active repository and re-index. |
+| `/api/repository/tree` | `GET` | Recursive repository file tree with directory structures. |
+| `/api/repository/file` | `GET` | Safe file reader with 1-based line bounds for the Code Viewer. |
+| `/api/chat` | `POST` | Conversational AI Copilot agent with multi-step tool calls, thoughts, and citations. |
+| `/api/investigate` | `POST` | Automated bug-to-fix workflow combining test runner, static analysis, and patch synthesis. |
+| `/api/patch/apply` | `POST` | Explicitly apply an approved patch to disk with an automatic `.bak` backup. |
+| `/api/patch/reject` | `POST` | Mark proposed patch rejected without modifying code. |
+| `/api/patch/verify` | `POST` | Execute isolated tests on proposed patch in a sandbox and report results. |
+| `/api/patch/rollback` | `POST` | Restore repository file from backup or original state. |
+| `/api/test/run` | `POST` | Run isolated test suite and parse failures. |
+| `/api/search` | `GET` | BM25 + dense hybrid search with Reciprocal Rank Fusion. |
+| `/api/symbols` | `GET` | AST function and class symbol finder. |
+
 

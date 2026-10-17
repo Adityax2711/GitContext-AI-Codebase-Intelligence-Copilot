@@ -14,12 +14,19 @@ authors = [
 dependencies = [
     "rank-bm25>=0.2.2",
     "pydantic>=2.0.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.1.0",
+    "httpx>=0.27.0",
+]
+dense = [
+    "qdrant-client>=1.8.0",
+    "fastembed>=0.2.0",
 ]
 
 [project.scripts]

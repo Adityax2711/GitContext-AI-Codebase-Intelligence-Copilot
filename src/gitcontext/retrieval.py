@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from rank_bm25 import BM25Okapi
 
@@ -121,10 +121,12 @@ class HybridRetriever:
         self,
         chunks: List[CodeChunk],
         rrf_k: int = 60,
+        vector_store: Optional[Any] = None,
     ) -> None:
         self.chunks = chunks
         self.rrf_k = rrf_k
         self.bm25_retriever = BM25Retriever(chunks)
+        self.vector_store = vector_store
 
     def search(
         self,
@@ -146,6 +148,16 @@ class HybridRetriever:
             cid = res.chunk.chunk_id
             rrf_scores[cid] = rrf_scores.get(cid, 0.0) + (1.0 / (self.rrf_k + rank))
 
+        # 2. Dense vector search if vector_store is provided and available
+        if self.vector_store is not None and hasattr(self.vector_store, "search"):
+            try:
+                dense_results = self.vector_store.search(query, self.chunks, top_k=min(top_k * 3, len(self.chunks)))
+                for rank, res in enumerate(dense_results, start=1):
+                    cid = res.chunk.chunk_id
+                    rrf_scores[cid] = rrf_scores.get(cid, 0.0) + (1.0 / (self.rrf_k + rank))
+            except Exception:
+                pass
+
         # Sort aggregated scores descending
         sorted_chunks = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
 
@@ -166,8 +178,9 @@ def hybrid_search(
     query: str,
     chunks: List[CodeChunk],
     top_k: int = 5,
+    vector_store: Optional[Any] = None,
 ) -> List[SearchResult]:
     """Convenience functional interface for hybrid retrieval."""
-    retriever = HybridRetriever(chunks)
+    retriever = HybridRetriever(chunks, vector_store=vector_store)
     return retriever.search(query, top_k=top_k)
 
