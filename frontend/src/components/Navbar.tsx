@@ -12,7 +12,7 @@ import {
   Check,
   Download,
 } from 'lucide-react'
-import type { GitHubUser, RepositoryInfo, SystemStatus } from '../types'
+import type { AuthUser, GitHubUser, RepositoryInfo, SystemStatus } from '../types'
 import { GitHubModal } from './GitHubModal'
 
 interface NavbarProps {
@@ -25,6 +25,8 @@ interface NavbarProps {
   isLoading: boolean
   githubUser: GitHubUser | null
   onUserUpdated: (user: GitHubUser | null) => void
+  currentUser?: AuthUser | null
+  onCurrentUserUpdated?: (user: AuthUser | null) => void
   onRepoImported: (path: string) => Promise<void>
 }
 
@@ -57,6 +59,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   isLoading,
   githubUser,
   onUserUpdated,
+  currentUser,
+  onCurrentUserUpdated,
   onRepoImported,
 }) => {
   const [showRepoModal, setShowRepoModal] = useState(false)
@@ -125,22 +129,34 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             className="btn-secondary"
             onClick={() => setShowGitHubModal(true)}
-            title={githubUser ? `Logged in as @${githubUser.login}` : 'Import repository from GitHub'}
+            title={
+              currentUser?.email
+                ? `Account: ${currentUser.email}${githubUser ? ` (@${githubUser.login})` : ''}`
+                : githubUser
+                ? `Logged in as @${githubUser.login}`
+                : 'Sign in or import repository from GitHub'
+            }
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              borderColor: githubUser ? 'rgba(56, 189, 248, 0.4)' : undefined,
+              borderColor: (githubUser || currentUser) ? 'rgba(56, 189, 248, 0.4)' : undefined,
             }}
           >
-            {githubUser ? (
+            {githubUser?.avatar_url || currentUser?.github?.avatar_url ? (
               <>
                 <img
-                  src={githubUser.avatar_url}
-                  alt={githubUser.login}
+                  src={githubUser?.avatar_url || currentUser?.github?.avatar_url || ''}
+                  alt={githubUser?.login || currentUser?.github?.login || ''}
                   style={{ width: '16px', height: '16px', borderRadius: '50%' }}
                 />
-                <span style={{ color: '#38bdf8', fontWeight: 600 }}>@{githubUser.login}</span>
+                <span style={{ color: '#38bdf8', fontWeight: 600 }}>
+                  @{githubUser?.login || currentUser?.github?.login}
+                </span>
+              </>
+            ) : currentUser?.email ? (
+              <>
+                <span style={{ color: '#818cf8', fontWeight: 600 }}>{currentUser.email.split('@')[0]}</span>
               </>
             ) : (
               <>
@@ -315,6 +331,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         onRepoImported={onRepoImported}
         githubUser={githubUser}
         onUserUpdated={onUserUpdated}
+        currentUser={currentUser}
+        onCurrentUserUpdated={onCurrentUserUpdated}
       />
     </>
   )

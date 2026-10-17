@@ -5,6 +5,7 @@ import {
   Bug,
 } from 'lucide-react'
 import type {
+  AuthUser,
   BugFinding,
   FileReadResult,
   FileTreeNode,
@@ -16,6 +17,7 @@ import type {
 } from './types'
 import {
   applyPatch,
+  fetchCurrentUser,
   fetchFileContent,
   fetchFileTree,
   fetchGitHubUser,
@@ -27,6 +29,7 @@ import {
   runDirectTests,
   selectRepository,
   sendChatMessage,
+  setAuthToken,
   verifyPatchInIsolation,
 } from './api'
 import { Navbar } from './components/Navbar'
@@ -42,6 +45,7 @@ export const App: React.FC = () => {
   const [activeRepoPath, setActiveRepoPath] = useState<string>('')
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([])
   const [githubUser, setGithubUser] = useState<GitHubUser | null>(null)
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
 
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
   const [fileData, setFileData] = useState<FileReadResult | null>(null)
@@ -63,7 +67,39 @@ export const App: React.FC = () => {
   }, [])
 
   const initApp = async () => {
+    // 1. Check for OAuth callback token in query string
     try {
+      const urlParams = new URLSearchParams(window.location.search)
+      const queryToken = urlParams.get('auth_token')
+      if (queryToken) {
+        setAuthToken(queryToken)
+        window.history.replaceState({}, document.title, window.location.pathname)
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      // Fetch authenticated user profile
+      try {
+        const me = await fetchCurrentUser()
+        if (me.authenticated && me.user) {
+          setCurrentUser(me.user)
+          if (me.user.github?.login) {
+            setGithubUser({
+              login: me.user.github.login,
+              id: me.user.github.id || 0,
+              avatar_url: me.user.github.avatar_url || '',
+              html_url: `https://github.com/${me.user.github.login}`,
+              public_repos: 0,
+              total_private_repos: 0,
+            })
+          }
+        }
+      } catch (e) {
+        // Unauthenticated is fine
+      }
+
       const s = await fetchStatus()
       setStatus(s)
       setActiveRepoPath(s.active_repository.path)
@@ -289,11 +325,11 @@ export const App: React.FC = () => {
       if (currentPatch) {
         setCurrentPatch({
           ...currentPatch,
-          test_verification: res,
-          status: res.all_passed ? 'verified' : currentPatch.status,
+          test_verification: res.test_summary,
+          status: res.passed ? 'verified' : currentPatch.status,
         })
       }
-      setTestSummary(res)
+      setTestSummary(res.test_summary)
     } catch (e: any) {
       alert(`Failed to verify patch: ${e.message}`)
     } finally {
@@ -330,6 +366,8 @@ export const App: React.FC = () => {
         isLoading={isLoading}
         githubUser={githubUser}
         onUserUpdated={setGithubUser}
+        currentUser={currentUser}
+        onCurrentUserUpdated={setCurrentUser}
         onRepoImported={handleRepoImported}
       />
 

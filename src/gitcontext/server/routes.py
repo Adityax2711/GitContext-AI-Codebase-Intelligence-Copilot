@@ -6,27 +6,36 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Response
+from fastapi.responses import RedirectResponse
 
 from gitcontext.agent.orchestrator import AgentOrchestrator
 from gitcontext.agent.tools import AgentToolRegistry
+from gitcontext.auth import AuthService
+from gitcontext.db import get_db
 from gitcontext.indexing import get_default_index_dir, index_repository, load_index
 from gitcontext.ingestion import should_ignore_dir, should_ignore_file
 from gitcontext.github_service import GitHubService, parse_github_identifier
 from gitcontext.investigator import BugInvestigator
 from gitcontext.llm import get_llm_client
 from gitcontext.server.models import (
+    ChatMessage,
     ChatRequest,
     FileReadRequest,
     GitHubImportRequest,
+    GitHubLinkTokenRequest,
     GitHubLoginRequest,
     InvestigateRequest,
     PatchActionRequest,
     RepositorySelectRequest,
     RunTestRequest,
     SearchRequest,
+    URLValidateRequest,
+    UserLoginRequest,
+    UserRegisterRequest,
 )
 from gitcontext.tools.repo_inspector import RepoInspector
+from gitcontext.url_validator import GitHubUrlValidationError, validate_and_parse_github_url
 
 router = APIRouter(prefix="/api")
 
@@ -52,6 +61,8 @@ class ServerState:
             self.llm_client = MockLLMClient()
         self.registry = AgentToolRegistry(self.active_repo_path, index_dir=self.index_dir)
         self.orchestrator = AgentOrchestrator(self.registry, llm_client=self.llm_client)
+        self.db = get_db()
+        self.auth_service = AuthService(db=self.db)
         self.conversation_history: List[Dict[str, str]] = []
 
     def select_repo(self, path_str: str, reindex: bool = False) -> Dict[str, Any]:
@@ -141,7 +152,25 @@ def list_repositories() -> List[Dict[str, Any]]:
                     "category": "github",
                 })
 
-    # 4. Current root workspace
+    # 4. Check repositories recorded in database
+    try:
+        with state.db.connection() as conn:
+            db_repos = conn.execute("SELECT * FROM repositories ORDER BY id DESC;").fetchall()
+            seen_paths = {r["path"] for r in repos}
+            for row in db_repos:
+                lp = row["local_path"]
+                if lp not in seen_paths and Path(lp).is_dir():
+                    repos.append({
+                        "name": row["full_name"],
+                        "path": lp,
+                        "is_active": lp == str(state.active_repo_path),
+                        "category": "github",
+                    })
+                    seen_paths.add(lp)
+    except Exception:
+        pass
+
+    # 5. Current root workspace
     if state.workspace_root != state.active_repo_path:
         repos.append({
             "name": state.workspace_root.name,
@@ -359,8 +388,257 @@ def get_symbols(
 
 
 # ---------------------------------------------------------------------------
-# GitHub Authentication and Repository Import Endpoints
+# Authentication & GitHub OAuth Endpoints
 # ---------------------------------------------------------------------------
+def _get_current_user(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
+    """Helper to extract active user from Authorization: Bearer <token> header."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:].strip()
+    return state.auth_service.get_user_from_session(token)
+
+
+@router.post("/auth/register")
+def register_user(req: UserRegisterRequest) -> Dict[str, Any]:
+    """Register a new user account with email and password."""
+    try:
+        user = state.auth_service.register_email_user(
+            email=req.email,
+            password=req.password,
+            name=req.name,
+        )
+        token = state.auth_service.create_session(user["id"])
+        return {
+            "status": "authenticated",
+            "token": token,
+            "user": user,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Registration failed: {e}")
+
+
+@router.post("/auth/login")
+def login_user(req: UserLoginRequest) -> Dict[str, Any]:
+    """Authenticate with email and password."""
+    user = state.auth_service.authenticate_email(req.email, req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    token = state.auth_service.create_session(user["id"])
+
+    # If user has GitHub connected, sync token with GitHubService
+    with state.db.connection() as conn:
+        row = conn.execute("SELECT github_token FROM users WHERE id = ?;", (user["id"],)).fetchone()
+        if row and row["github_token"]:
+            state.github_service.set_token(row["github_token"])
+
+    return {
+        "status": "authenticated",
+        "token": token,
+        "user": user,
+    }
+
+
+@router.post("/auth/logout")
+def logout_user(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Invalidate session token."""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+        state.auth_service.delete_session(token)
+
+    state.github_service.set_token(None)
+    return {"status": "logged_out"}
+
+
+@router.get("/auth/me")
+def get_current_user_profile(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Return profile of the currently authenticated user."""
+    user = _get_current_user(authorization)
+    if user:
+        return {"authenticated": True, "user": user}
+
+    # Fallback to GitHubService standalone token if present
+    gh_user = state.github_service.get_authenticated_user()
+    if gh_user:
+        return {
+            "authenticated": True,
+            "user": {
+                "id": None,
+                "email": None,
+                "name": gh_user.name,
+                "has_password": False,
+                "github": {
+                    "connected": True,
+                    "id": gh_user.id,
+                    "login": gh_user.login,
+                    "avatar_url": gh_user.avatar_url,
+                },
+            },
+        }
+
+    return {"authenticated": False, "user": None}
+
+
+@router.get("/auth/github/start")
+def start_github_oauth(
+    redirect_uri: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Initiate GitHub OAuth flow with anti-CSRF state token."""
+    current_user = _get_current_user(authorization)
+    user_id = current_user["id"] if current_user else None
+
+    if not state.auth_service.github_client_id:
+        return {
+            "configured": False,
+            "message": "GitHub OAuth App is not configured on the server. Please set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET, or sign in using a Personal Access Token.",
+        }
+
+    try:
+        state_token = state.auth_service.create_oauth_state(
+            user_id=user_id,
+            action="link" if user_id else "login",
+            redirect_uri=redirect_uri,
+        )
+        auth_url = state.auth_service.build_github_oauth_url(state_token, redirect_uri=redirect_uri)
+        return {
+            "configured": True,
+            "authorization_url": auth_url,
+            "state": state_token,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/auth/github/callback")
+def github_oauth_callback(
+    code: Optional[str] = Query(None),
+    state_param: Optional[str] = Query(None, alias="state"),
+    error: Optional[str] = Query(None),
+    error_description: Optional[str] = Query(None),
+) -> Any:
+    """Handle OAuth callback from GitHub."""
+    if error:
+        raise HTTPException(status_code=400, detail=f"GitHub authorization denied: {error_description or error}")
+
+    if not code or not state_param:
+        raise HTTPException(status_code=400, detail="Missing authorization code or state parameter.")
+
+    # 1. Verify anti-CSRF state
+    state_record = state.auth_service.verify_and_consume_oauth_state(state_param)
+    if not state_record:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state parameter. Please try signing in again.")
+
+    # 2. Exchange code for access token
+    cb_uri = state_record.get("redirect_uri")
+    access_token, token_err = state.auth_service.exchange_github_code(code, redirect_uri=cb_uri)
+    if not access_token or token_err:
+        raise HTTPException(status_code=400, detail=token_err or "Failed to exchange GitHub authorization code.")
+
+    # 3. Fetch profile and verified email
+    profile, email, profile_err = state.auth_service.fetch_github_profile_and_email(access_token)
+    if not profile or profile_err:
+        raise HTTPException(status_code=400, detail=profile_err or "Failed to fetch GitHub profile.")
+
+    # 4. Handle linking vs login
+    user_id_to_link = state_record.get("user_id")
+    try:
+        if user_id_to_link:
+            user = state.auth_service.link_github_to_user(user_id_to_link, profile, access_token)
+        else:
+            user = state.auth_service.login_or_create_github_user(profile, access_token, email=email)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # 5. Issue session token and configure GitHub service
+    session_token = state.auth_service.create_session(user["id"])
+    state.github_service.set_token(access_token)
+
+    # 6. Redirect back to frontend with session token
+    redirect_target = f"/?auth_token={session_token}&login_success=true"
+    return RedirectResponse(url=redirect_target, status_code=302)
+
+
+@router.post("/auth/github/link-token")
+def link_github_pat(
+    req: GitHubLinkTokenRequest,
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Link a GitHub Personal Access Token to current authenticated account."""
+    current_user = _get_current_user(authorization)
+    token = req.token.strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="GitHub token cannot be empty.")
+
+    profile, _, err = state.auth_service.fetch_github_profile_and_email(token)
+    if not profile or err:
+        raise HTTPException(status_code=401, detail=err or "Invalid or expired GitHub token.")
+
+    state.github_service.set_token(token)
+
+    if current_user:
+        try:
+            updated_user = state.auth_service.link_github_to_user(current_user["id"], profile, token)
+            return {
+                "status": "linked",
+                "user": updated_user,
+            }
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    return {
+        "status": "authenticated",
+        "github": {
+            "login": profile.get("login"),
+            "avatar_url": profile.get("avatar_url"),
+        },
+    }
+
+
+@router.post("/auth/github/disconnect")
+def disconnect_github(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Disconnect GitHub from current authenticated account with lockout safety check."""
+    current_user = _get_current_user(authorization)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    try:
+        updated_user = state.auth_service.disconnect_github_account(current_user["id"])
+        state.github_service.set_token(None)
+        return {
+            "status": "disconnected",
+            "user": updated_user,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# GitHub Repository Validation, User Profile & Repos Endpoints
+# ---------------------------------------------------------------------------
+@router.post("/github/validate-url")
+def validate_repository_url(req: URLValidateRequest) -> Dict[str, Any]:
+    """Validate and parse a GitHub repository URL or identifier with rich error feedback."""
+    try:
+        parsed = validate_and_parse_github_url(req.url)
+        return {
+            "valid": True,
+            "owner": parsed.owner,
+            "repo": parsed.repo,
+            "full_name": parsed.full_name,
+            "canonical_url": parsed.canonical_url,
+            "clone_url": parsed.clone_url,
+        }
+    except GitHubUrlValidationError as e:
+        return {
+            "valid": False,
+            "error": e.message,
+            "code": e.code,
+        }
+
+
 @router.get("/github/user")
 def get_github_user() -> Dict[str, Any]:
     """Check active GitHub authentication status and profile."""
@@ -415,37 +693,129 @@ def list_github_user_repos(limit: int = Query(50, ge=1, le=100)) -> Dict[str, An
 
 
 @router.post("/github/import")
-def import_github_repo(req: GitHubImportRequest) -> Dict[str, Any]:
-    """Clone or download a repository from GitHub and automatically index it into RAG."""
-    # Temporarily set token if provided in request
+def import_github_repo(
+    req: GitHubImportRequest,
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """Clone or download a repository from GitHub, persist in database, and index into RAG."""
+    # 1. URL validation
+    try:
+        parsed_repo = validate_and_parse_github_url(req.repository_url)
+    except GitHubUrlValidationError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+    # 2. Resolve token
+    current_user = _get_current_user(authorization)
+    token_to_use = req.token or state.github_service.token
+    if not token_to_use and current_user:
+        with state.db.connection() as conn:
+            row = conn.execute("SELECT github_token FROM users WHERE id = ?;", (current_user["id"],)).fetchone()
+            if row and row["github_token"]:
+                token_to_use = row["github_token"]
+
     if req.token:
         state.github_service.set_token(req.token)
 
+    # 3. Import repository files
     try:
         dest_path = state.github_service.import_repository(
             identifier=req.repository_url,
             branch=req.branch,
+            token=token_to_use,
             force_reclone=req.force_reclone,
         )
+    except GitHubUrlValidationError as e:
+        raise HTTPException(status_code=400, detail=e.message)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = str(e)
+        status_code = 400
+        if "rate limit" in error_msg.lower():
+            status_code = 429
+        elif "authentication failed" in error_msg.lower() or "expired" in error_msg.lower():
+            status_code = 401
+        elif "not found" in error_msg.lower() or "does not exist" in error_msg.lower():
+            status_code = 404
+        raise HTTPException(status_code=status_code, detail=error_msg)
 
-    # Switch active repository and run RAG indexing
+    # 4. Switch active repository and run RAG indexing
     select_info = state.select_repo(str(dest_path), reindex=req.reindex)
 
-    # Fetch fresh index metadata
+    # 5. Fetch fresh index metadata
     chunks, meta = load_index(state.index_dir)
+    total_chunks = len(chunks) if chunks else 0
+    total_files = meta.total_files if meta else 0
+
+    # 6. Persist repository record in SQLite database
+    from datetime import datetime, timezone
+    import uuid
+
+    now = datetime.now(timezone.utc).isoformat()
+    repo_id: Optional[int] = None
+
+    try:
+        with state.db.connection() as conn:
+            existing_repo = conn.execute(
+                "SELECT id FROM repositories WHERE local_path = ?;",
+                (str(dest_path),),
+            ).fetchone()
+
+            if existing_repo:
+                repo_id = existing_repo["id"]
+                conn.execute(
+                    """
+                    UPDATE repositories
+                    SET total_chunks = ?, total_files = ?, last_indexed_at = ?, branch = ?
+                    WHERE id = ?;
+                    """,
+                    (total_chunks, total_files, now, req.branch or "main", repo_id),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO repositories (user_id, owner, name, full_name, branch, local_path, total_chunks, total_files, last_indexed_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        current_user["id"] if current_user else None,
+                        parsed_repo.owner,
+                        parsed_repo.repo,
+                        parsed_repo.full_name,
+                        req.branch or "main",
+                        str(dest_path),
+                        total_chunks,
+                        total_files,
+                        now,
+                        now,
+                    ),
+                )
+                repo_id = cursor.lastrowid
+
+            # Record indexing job
+            job_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO indexing_jobs (id, repo_id, status, progress, total_files, total_chunks, created_at, finished_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (job_id, repo_id, "completed", 1.0, total_files, total_chunks, now, now),
+            )
+    except Exception as e:
+        logger.warning(f"Could not persist repository record to database: {e}")
 
     return {
         "status": "imported",
+        "repository_id": repo_id,
         "repository_name": select_info["repository_name"],
         "repository_path": select_info["repository_path"],
+        "owner": parsed_repo.owner,
+        "repo": parsed_repo.repo,
         "index": {
-            "total_chunks": len(chunks) if chunks else 0,
-            "total_files": meta.total_files if meta else 0,
+            "total_chunks": total_chunks,
+            "total_files": total_files,
             "dense_indexed": getattr(meta, "dense_indexed", False) if meta else False,
             "dense_vectors_count": getattr(meta, "dense_vectors_count", 0) if meta else 0,
             "last_indexed_at": meta.last_indexed_at if meta else None,
         },
     }
+
 

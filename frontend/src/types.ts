@@ -164,3 +164,34 @@ export interface GitHubRepoSummary {
   language?: string | null
 }
 
+export interface AuthUser {
+  id: number | null
+  email: string | null
+  name?: string | null
+  has_password?: boolean
+  github: {
+    connected: boolean
+    id?: number | null
+    login: string | null
+    avatar_url: string | null
+  }
+}
+
+export interface AuthResponse {
+  status: string
+  token: string
+  user: AuthUser
+}
+
+export interface URLValidationResult {
+  valid: boolean
+  error?: string
+  code?: string
+  owner?: string
+  repo?: string
+  full_name?: string
+  canonical_url?: string
+  clone_url?: string
+}
+
+

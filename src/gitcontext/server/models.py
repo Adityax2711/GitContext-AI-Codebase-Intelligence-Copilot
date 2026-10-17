@@ -61,3 +61,21 @@ class GitHubImportRequest(BaseModel):
     force_reclone: bool = Field(default=False, description="Whether to re-download fresh copy")
     reindex: bool = Field(default=True, description="Automatically index into RAG vector store")
 
+
+class UserRegisterRequest(BaseModel):
+    email: str = Field(..., description="User email address")
+    password: str = Field(..., min_length=6, description="Password (at least 6 characters)")
+    name: Optional[str] = Field(default=None, description="User full or display name")
+
+
+class UserLoginRequest(BaseModel):
+    email: str = Field(..., description="User email address")
+    password: str = Field(..., description="Password")
+
+
+class GitHubLinkTokenRequest(BaseModel):
+    token: str = Field(..., description="GitHub Personal Access Token to link to current account")
+
+
+class URLValidateRequest(BaseModel):
+    url: str = Field(..., description="Repository URL or identifier to validate")

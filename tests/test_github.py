@@ -84,13 +84,14 @@ def test_github_service_import_via_zipball(tmp_path: Path):
     mock_resp.read.return_value = zip_content
     mock_resp.__enter__.return_value = mock_resp
 
-    with patch.object(service, "_clone_with_git", return_value=False):
-        with patch("urllib.request.urlopen", return_value=mock_resp):
-            dest = service.import_repository("testowner/myrepo")
-            assert dest.is_dir()
-            assert (dest / "README.md").exists()
-            assert (dest / "src" / "main.py").exists()
-            assert "def run" in (dest / "src" / "main.py").read_text()
+    with patch.object(service, "_clone_with_git", return_value=(False, "mock")):
+        with patch.object(service, "check_repository_access", return_value=(True, None, None)):
+            with patch("urllib.request.urlopen", return_value=mock_resp):
+                dest = service.import_repository("testowner/myrepo")
+                assert dest.is_dir()
+                assert (dest / "README.md").exists()
+                assert (dest / "src" / "main.py").exists()
+                assert "def run" in (dest / "src" / "main.py").read_text()
 
 
 def test_api_github_user_and_login_flow(client: TestClient):
@@ -143,18 +144,19 @@ def test_api_github_import(client: TestClient, tmp_path: Path):
     mock_resp.read.return_value = zip_content
     mock_resp.__enter__.return_value = mock_resp
 
-    with patch.object(state.github_service, "_clone_with_git", return_value=False):
-        with patch("urllib.request.urlopen", return_value=mock_resp):
-            resp = client.post(
-                "/api/github/import",
-                json={
-                    "repository_url": "https://github.com/testowner/quickrepo",
-                    "reindex": True,
-                },
-            )
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["status"] == "imported"
-            assert "quickrepo" in data["repository_name"]
-            assert data["index"]["total_files"] >= 1
-            assert data["index"]["total_chunks"] >= 1
+    with patch.object(state.github_service, "_clone_with_git", return_value=(False, "mock")):
+        with patch.object(state.github_service, "check_repository_access", return_value=(True, None, None)):
+            with patch("urllib.request.urlopen", return_value=mock_resp):
+                resp = client.post(
+                    "/api/github/import",
+                    json={
+                        "repository_url": "https://github.com/testowner/quickrepo",
+                        "reindex": True,
+                    },
+                )
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["status"] == "imported"
+                assert "quickrepo" in data["repository_name"]
+                assert data["index"]["total_files"] >= 1
+                assert data["index"]["total_chunks"] >= 1
