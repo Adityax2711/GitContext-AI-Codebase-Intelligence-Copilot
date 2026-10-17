@@ -48,3 +48,16 @@ class RunTestRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
+
+
+class GitHubLoginRequest(BaseModel):
+    token: str = Field(..., description="GitHub Personal Access Token (PAT) with repo/read:user scope")
+
+
+class GitHubImportRequest(BaseModel):
+    repository_url: str = Field(..., description="GitHub repository URL or owner/repo (e.g. pallets/flask)")
+    branch: Optional[str] = Field(default=None, description="Optional branch or tag")
+    token: Optional[str] = Field(default=None, description="Optional override token for private repo")
+    force_reclone: bool = Field(default=False, description="Whether to re-download fresh copy")
+    reindex: bool = Field(default=True, description="Automatically index into RAG vector store")
+

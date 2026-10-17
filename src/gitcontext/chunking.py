@@ -10,6 +10,18 @@ from typing import List, Optional
 from gitcontext.models import CodeChunk
 
 
+def is_test_file(relative_path: str) -> bool:
+    """Check if file belongs to a test suite."""
+    norm = relative_path.replace("\\", "/").lower()
+    parts = norm.split("/")
+    filename = parts[-1]
+    return (
+        "tests" in parts
+        or filename.startswith("test_")
+        or filename.endswith("_test.py")
+    )
+
+
 def chunk_python_source(
     repo_name: str,
     file_path: str,
@@ -24,6 +36,7 @@ def chunk_python_source(
 
     lines = source_code.splitlines(keepends=True)
     total_lines = len(lines)
+    source_type: Literal["code", "test"] = "test" if is_test_file(file_path) else "code"
 
     try:
         tree = ast.parse(source_code)
@@ -32,7 +45,7 @@ def chunk_python_source(
         return [
             CodeChunk.create(
                 repository=repo_name,
-                source_type="code",
+                source_type=source_type,
                 file_path=file_path,
                 symbol_or_heading=f"<syntax_error_line_{e.lineno or 1}>",
                 programming_language="python",
@@ -61,7 +74,7 @@ def chunk_python_source(
             chunks.append(
                 CodeChunk.create(
                     repository=repo_name,
-                    source_type="code",
+                    source_type=source_type,
                     file_path=file_path,
                     symbol_or_heading=f"class {node.name}",
                     programming_language="python",
@@ -81,7 +94,7 @@ def chunk_python_source(
                     chunks.append(
                         CodeChunk.create(
                             repository=repo_name,
-                            source_type="code",
+                            source_type=source_type,
                             file_path=file_path,
                             symbol_or_heading=f"{node.name}.{item.name}",
                             programming_language="python",
@@ -97,7 +110,7 @@ def chunk_python_source(
             chunks.append(
                 CodeChunk.create(
                     repository=repo_name,
-                    source_type="code",
+                    source_type=source_type,
                     file_path=file_path,
                     symbol_or_heading=f"def {node.name}",
                     programming_language="python",
@@ -113,7 +126,7 @@ def chunk_python_source(
         chunks.append(
             CodeChunk.create(
                 repository=repo_name,
-                source_type="code",
+                source_type=source_type,
                 file_path=file_path,
                 symbol_or_heading="<module>",
                 programming_language="python",
@@ -132,7 +145,7 @@ def chunk_python_source(
                     0,
                     CodeChunk.create(
                         repository=repo_name,
-                        source_type="code",
+                        source_type=source_type,
                         file_path=file_path,
                         symbol_or_heading="<module_preamble>",
                         programming_language="python",

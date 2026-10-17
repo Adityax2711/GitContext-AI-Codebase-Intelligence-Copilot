@@ -77,6 +77,7 @@ def load_index(index_dir: Path) -> Tuple[List[CodeChunk], Optional[IndexMetadata
 def index_repository(
     repo_path: Path,
     index_dir: Optional[Path] = None,
+    enable_dense: bool = True,
 ) -> IndexMetadata:
     """Read a local repository, extract code and doc chunks, and persist the index."""
     resolved_repo = repo_path.resolve()
@@ -102,6 +103,22 @@ def index_repository(
         all_chunks.extend(file_chunks)
         processed_files += 1
 
+    # Dense vector indexing via Qdrant
+    dense_indexed = False
+    dense_count = 0
+    if enable_dense and all_chunks:
+        try:
+            from gitcontext.vector_store import QdrantVectorStore
+
+            qdrant_dir = target_index_dir / "qdrant"
+            vstore = QdrantVectorStore(storage_path=qdrant_dir, in_memory=False)
+            if vstore.is_available():
+                dense_count = vstore.index_chunks(all_chunks)
+                dense_indexed = dense_count > 0
+        except Exception:
+            dense_indexed = False
+            dense_count = 0
+
     iso_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     metadata = IndexMetadata(
         repository_name=repo_name,
@@ -109,6 +126,8 @@ def index_repository(
         total_files=processed_files,
         total_chunks=len(all_chunks),
         last_indexed_at=iso_timestamp,
+        dense_indexed=dense_indexed,
+        dense_vectors_count=dense_count,
     )
 
     save_index(all_chunks, metadata, target_index_dir)

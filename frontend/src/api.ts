@@ -170,3 +170,59 @@ export async function runDirectTests(testPath?: string): Promise<TestExecutionSu
   }
   return res.json()
 }
+
+export async function fetchGitHubUser(): Promise<{ authenticated: boolean; user: any | null }> {
+  const res = await fetch(`${API_BASE}/github/user`)
+  if (!res.ok) throw new Error(`Failed to fetch GitHub user: ${res.statusText}`)
+  return res.json()
+}
+
+export async function loginGitHub(token: string): Promise<{ status: string; user: any }> {
+  const res = await fetch(`${API_BASE}/github/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `GitHub login failed: ${res.statusText}`)
+  }
+  return res.json()
+}
+
+export async function logoutGitHub(): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/github/logout`, {
+    method: 'POST',
+  })
+  if (!res.ok) throw new Error(`GitHub logout failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function fetchGitHubRepos(limit = 50): Promise<{ user: string; repositories: any[] }> {
+  const res = await fetch(`${API_BASE}/github/repos?limit=${limit}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Failed to list GitHub repositories: ${res.statusText}`)
+  }
+  return res.json()
+}
+
+export async function importGitHubRepo(data: {
+  repository_url: string
+  branch?: string
+  token?: string
+  force_reclone?: boolean
+  reindex?: boolean
+}): Promise<any> {
+  const res = await fetch(`${API_BASE}/github/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Failed to import repository from GitHub: ${res.statusText}`)
+  }
+  return res.json()
+}
+

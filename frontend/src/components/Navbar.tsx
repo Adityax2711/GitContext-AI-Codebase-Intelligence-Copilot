@@ -10,8 +10,10 @@ import {
   ChevronDown,
   X,
   Check,
+  Download,
 } from 'lucide-react'
-import type { RepositoryInfo, SystemStatus } from '../types'
+import type { GitHubUser, RepositoryInfo, SystemStatus } from '../types'
+import { GitHubModal } from './GitHubModal'
 
 interface NavbarProps {
   status: SystemStatus | null
@@ -21,7 +23,29 @@ interface NavbarProps {
   onRunAllTests: () => void
   onQuickInvestigate: () => void
   isLoading: boolean
+  githubUser: GitHubUser | null
+  onUserUpdated: (user: GitHubUser | null) => void
+  onRepoImported: (path: string) => Promise<void>
 }
+
+const GitHubIcon: React.FC<{ size?: number; color?: string }> = ({
+  size = 15,
+  color = 'currentColor',
+}) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke={color}
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
+    <path d="M9 18c-4.51 2-5-2-7-2" />
+  </svg>
+)
 
 export const Navbar: React.FC<NavbarProps> = ({
   status,
@@ -31,8 +55,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   onRunAllTests,
   onQuickInvestigate,
   isLoading,
+  githubUser,
+  onUserUpdated,
+  onRepoImported,
 }) => {
   const [showRepoModal, setShowRepoModal] = useState(false)
+  const [showGitHubModal, setShowGitHubModal] = useState(false)
   const [customPath, setCustomPath] = useState('')
 
   const activeRepoName =
@@ -93,6 +121,35 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         <div className="nav-actions">
+          {/* GitHub Account / Import Button */}
+          <button
+            className="btn-secondary"
+            onClick={() => setShowGitHubModal(true)}
+            title={githubUser ? `Logged in as @${githubUser.login}` : 'Import repository from GitHub'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              borderColor: githubUser ? 'rgba(56, 189, 248, 0.4)' : undefined,
+            }}
+          >
+            {githubUser ? (
+              <>
+                <img
+                  src={githubUser.avatar_url}
+                  alt={githubUser.login}
+                  style={{ width: '16px', height: '16px', borderRadius: '50%' }}
+                />
+                <span style={{ color: '#38bdf8', fontWeight: 600 }}>@{githubUser.login}</span>
+              </>
+            ) : (
+              <>
+                <GitHubIcon size={14} color="#f0f6fc" />
+                <span>Import GitHub</span>
+              </>
+            )}
+          </button>
+
           <button
             className="btn-secondary"
             onClick={onQuickInvestigate}
@@ -133,11 +190,49 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
 
             <div className="modal-body">
-              <p style={{ color: '#8b949e', fontSize: '12px', marginBottom: '12px' }}>
-                Choose a repository from detected fixtures or enter an absolute local path:
+              {/* GitHub Import Callout */}
+              <div
+                style={{
+                  padding: '12px',
+                  borderRadius: '6px',
+                  background: 'rgba(99, 102, 241, 0.1)',
+                  border: '1px solid rgba(99, 102, 241, 0.25)',
+                  marginBottom: '14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <GitHubIcon size={20} color="#818cf8" />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '13px', color: '#f0f6fc' }}>
+                      Import from GitHub
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#8b949e' }}>
+                      Clone public or private GitHub repositories & index with AI
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setShowRepoModal(false)
+                    setShowGitHubModal(true)
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}
+                >
+                  <Download size={13} />
+                  <span>Open GitHub</span>
+                </button>
+              </div>
+
+              <p style={{ color: '#8b949e', fontSize: '12px', marginBottom: '10px' }}>
+                Or select an active, fixture, or previously imported repository:
               </p>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px', maxHeight: '220px', overflowY: 'auto' }}>
                 {repositories.map((repo) => {
                   const isActive = repo.path === activeRepoPath
                   return (
@@ -159,8 +254,23 @@ export const Navbar: React.FC<NavbarProps> = ({
                       }}
                     >
                       <div>
-                        <div style={{ fontWeight: 600, fontSize: '13px', color: '#f0f6fc' }}>
-                          {repo.name}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontWeight: 600, fontSize: '13px', color: '#f0f6fc' }}>
+                            {repo.name}
+                          </span>
+                          {repo.category === 'github' && (
+                            <span
+                              style={{
+                                fontSize: '10px',
+                                padding: '1px 6px',
+                                borderRadius: '4px',
+                                background: 'rgba(56, 189, 248, 0.15)',
+                                color: '#38bdf8',
+                              }}
+                            >
+                              GitHub
+                            </span>
+                          )}
                         </div>
                         <div style={{ fontSize: '11px', color: '#6e7681', marginTop: '2px' }}>
                           {repo.path}
@@ -197,6 +307,15 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
       )}
+
+      {/* GitHub Modal */}
+      <GitHubModal
+        isOpen={showGitHubModal}
+        onClose={() => setShowGitHubModal(false)}
+        onRepoImported={onRepoImported}
+        githubUser={githubUser}
+        onUserUpdated={onUserUpdated}
+      />
     </>
   )
 }

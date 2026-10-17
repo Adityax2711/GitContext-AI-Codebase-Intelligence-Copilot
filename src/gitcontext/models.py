@@ -9,11 +9,11 @@ from typing import Any, Dict, Literal
 
 @dataclass(frozen=True)
 class CodeChunk:
-    """Represents an extracted unit of code or documentation."""
+    """Represents an extracted unit of code, documentation, or test."""
 
     chunk_id: str
     repository: str
-    source_type: Literal["code", "documentation"]
+    source_type: Literal["code", "documentation", "test"]
     file_path: str
     symbol_or_heading: str
     programming_language: str
@@ -47,7 +47,7 @@ class CodeChunk:
     def create(
         cls,
         repository: str,
-        source_type: Literal["code", "documentation"],
+        source_type: Literal["code", "documentation", "test"],
         file_path: str,
         symbol_or_heading: str,
         programming_language: str,
@@ -117,6 +117,8 @@ class IndexMetadata:
     total_files: int
     total_chunks: int
     last_indexed_at: str
+    dense_indexed: bool = False
+    dense_vectors_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -129,4 +131,6 @@ class IndexMetadata:
             total_files=int(data["total_files"]),
             total_chunks=int(data["total_chunks"]),
             last_indexed_at=data["last_indexed_at"],
+            dense_indexed=bool(data.get("dense_indexed", False)),
+            dense_vectors_count=int(data.get("dense_vectors_count", 0)),
         )

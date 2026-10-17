@@ -73,3 +73,27 @@ def test_bm25_retrieval_ranking():
 
 def test_search_empty_index():
     assert search_index("any query", chunks=[]) == []
+
+
+def test_hybrid_retriever_bm25_fallback():
+    chunk = CodeChunk.create(
+        repository="demo",
+        source_type="code",
+        file_path="src/utils.py",
+        symbol_or_heading="def format_currency",
+        programming_language="python",
+        start_line=1,
+        end_line=5,
+        content="def format_currency(amount: float) -> str:\n    return f'${amount:.2f}'\n",
+    )
+    from gitcontext.retrieval import HybridRetriever, hybrid_search
+
+    retriever = HybridRetriever([chunk], vector_store=None)
+    results = retriever.search("format currency amount")
+    assert len(results) == 1
+    assert results[0].chunk.symbol_or_heading == "def format_currency"
+    assert results[0].score > 0
+
+    results_func = hybrid_search("format currency", [chunk])
+    assert len(results_func) == 1
+    assert results_func[0].chunk.chunk_id == chunk.chunk_id

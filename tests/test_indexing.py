@@ -45,3 +45,20 @@ def test_index_empty_repo(tmp_path: Path):
     chunks, loaded_meta = load_index(index_dir)
     assert len(chunks) == 0
     assert loaded_meta is not None
+    assert loaded_meta.dense_indexed is False
+
+
+def test_index_repo_with_dense_store(tmp_path: Path):
+    repo_dir = tmp_path / "code_repo"
+    repo_dir.mkdir()
+    (repo_dir / "app.py").write_text("def start_server():\n    print('listening')\n")
+
+    index_dir = tmp_path / "repo_index"
+    meta = index_repository(repo_path=repo_dir, index_dir=index_dir, enable_dense=True)
+
+    assert meta.total_files == 1
+    assert meta.total_chunks >= 1
+    # Check that metadata reflects indexing
+    _, loaded_meta = load_index(index_dir)
+    assert loaded_meta is not None
+    assert loaded_meta.total_chunks == meta.total_chunks

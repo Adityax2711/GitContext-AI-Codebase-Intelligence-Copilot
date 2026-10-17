@@ -140,3 +140,27 @@ export interface SystemStatus {
     model: string
   }
 }
+
+export interface GitHubUser {
+  login: string
+  id: number
+  name?: string | null
+  avatar_url: string
+  html_url: string
+  public_repos: number
+  total_private_repos: number
+}
+
+export interface GitHubRepoSummary {
+  name: string
+  full_name: string
+  owner: string
+  description?: string | null
+  private: boolean
+  html_url: string
+  clone_url: string
+  default_branch: string
+  stars: number
+  language?: string | null
+}
+

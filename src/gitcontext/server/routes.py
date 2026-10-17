@@ -12,11 +12,14 @@ from gitcontext.agent.orchestrator import AgentOrchestrator
 from gitcontext.agent.tools import AgentToolRegistry
 from gitcontext.indexing import get_default_index_dir, index_repository, load_index
 from gitcontext.ingestion import should_ignore_dir, should_ignore_file
+from gitcontext.github_service import GitHubService, parse_github_identifier
 from gitcontext.investigator import BugInvestigator
 from gitcontext.llm import get_llm_client
 from gitcontext.server.models import (
     ChatRequest,
     FileReadRequest,
+    GitHubImportRequest,
+    GitHubLoginRequest,
     InvestigateRequest,
     PatchActionRequest,
     RepositorySelectRequest,
@@ -41,6 +44,7 @@ class ServerState:
             self.active_repo_path = self.workspace_root
 
         self.index_dir = self.workspace_root / "data" / "index"
+        self.github_service = GitHubService(repos_dir=self.workspace_root / "data" / "repos")
         try:
             self.llm_client = get_llm_client()
         except Exception:
@@ -125,7 +129,19 @@ def list_repositories() -> List[Dict[str, Any]]:
                     "category": "fixture",
                 })
 
-    # 3. Current root workspace
+    # 3. Check imported GitHub repositories in data/repos
+    repos_dir = state.workspace_root / "data" / "repos"
+    if repos_dir.is_dir():
+        for d in sorted(repos_dir.iterdir()):
+            if d.is_dir() and d != state.active_repo_path:
+                repos.append({
+                    "name": d.name.replace("_", "/"),
+                    "path": str(d.resolve()),
+                    "is_active": False,
+                    "category": "github",
+                })
+
+    # 4. Current root workspace
     if state.workspace_root != state.active_repo_path:
         repos.append({
             "name": state.workspace_root.name,
@@ -340,3 +356,96 @@ def get_symbols(
     """Discover functions and classes in repository."""
     res = state.registry.execute("find_symbols", {"name_query": query, "file_path": file_path})
     return res.get("result", {})
+
+
+# ---------------------------------------------------------------------------
+# GitHub Authentication and Repository Import Endpoints
+# ---------------------------------------------------------------------------
+@router.get("/github/user")
+def get_github_user() -> Dict[str, Any]:
+    """Check active GitHub authentication status and profile."""
+    user = state.github_service.get_authenticated_user()
+    return {
+        "authenticated": user is not None,
+        "user": user.to_dict() if user else None,
+    }
+
+
+@router.post("/github/login")
+def github_login(req: GitHubLoginRequest) -> Dict[str, Any]:
+    """Authenticate with GitHub using a Personal Access Token or OAuth token."""
+    token = req.token.strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="GitHub token cannot be empty.")
+
+    state.github_service.set_token(token)
+    user = state.github_service.get_authenticated_user()
+    if not user:
+        state.github_service.set_token(None)
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired GitHub token. Ensure the token has 'repo' and 'read:user' scopes.",
+        )
+
+    return {
+        "status": "authenticated",
+        "user": user.to_dict(),
+    }
+
+
+@router.post("/github/logout")
+def github_logout() -> Dict[str, Any]:
+    """Clear GitHub authentication session."""
+    state.github_service.set_token(None)
+    return {"status": "logged_out"}
+
+
+@router.get("/github/repos")
+def list_github_user_repos(limit: int = Query(50, ge=1, le=100)) -> Dict[str, Any]:
+    """List accessible repositories for the authenticated GitHub user."""
+    user = state.github_service.get_authenticated_user()
+    if not user:
+        raise HTTPException(status_code=401, detail="Please connect your GitHub account first.")
+
+    repos = state.github_service.list_user_repositories(limit=limit)
+    return {
+        "user": user.login,
+        "repositories": [r.to_dict() for r in repos],
+    }
+
+
+@router.post("/github/import")
+def import_github_repo(req: GitHubImportRequest) -> Dict[str, Any]:
+    """Clone or download a repository from GitHub and automatically index it into RAG."""
+    # Temporarily set token if provided in request
+    if req.token:
+        state.github_service.set_token(req.token)
+
+    try:
+        dest_path = state.github_service.import_repository(
+            identifier=req.repository_url,
+            branch=req.branch,
+            force_reclone=req.force_reclone,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Switch active repository and run RAG indexing
+    select_info = state.select_repo(str(dest_path), reindex=req.reindex)
+
+    # Fetch fresh index metadata
+    chunks, meta = load_index(state.index_dir)
+
+    return {
+        "status": "imported",
+        "repository_name": select_info["repository_name"],
+        "repository_path": select_info["repository_path"],
+        "index": {
+            "total_chunks": len(chunks) if chunks else 0,
+            "total_files": meta.total_files if meta else 0,
+            "dense_indexed": getattr(meta, "dense_indexed", False) if meta else False,
+            "dense_vectors_count": getattr(meta, "dense_vectors_count", 0) if meta else 0,
+            "last_indexed_at": meta.last_indexed_at if meta else None,
+        },
+    }
+

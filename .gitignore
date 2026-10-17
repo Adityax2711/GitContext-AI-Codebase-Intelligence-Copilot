@@ -45,7 +45,7 @@ htmlcov/
 *.swo
 
 # Project data
-data/index/
+data/
 
 # Node / Frontend
 node_modules/

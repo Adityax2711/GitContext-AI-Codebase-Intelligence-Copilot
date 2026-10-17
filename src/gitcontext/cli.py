@@ -53,16 +53,18 @@ def cmd_index(repo_path_str: str, index_dir_str: Optional[str] = None) -> int:
         return 1
 
     print("\n--- Indexing Completed Successfully ---")
-    print(f"Repository : {metadata.repository_name} ({metadata.repository_path})")
-    print(f"Files      : {metadata.total_files} file(s) ingested")
-    print(f"Chunks     : {metadata.total_chunks} chunk(s) stored")
-    print(f"Saved to   : {index_dir.resolve() / 'chunks.jsonl'}")
-    print(f"Indexed at : {metadata.last_indexed_at}")
+    print(f"Repository  : {metadata.repository_name} ({metadata.repository_path})")
+    print(f"Files       : {metadata.total_files} file(s) ingested")
+    print(f"Chunks      : {metadata.total_chunks} chunk(s) stored")
+    dense_desc = f"Enabled ({metadata.dense_vectors_count} vectors in Qdrant)" if metadata.dense_indexed else "BM25 keyword index"
+    print(f"Dense Store : {dense_desc}")
+    print(f"Saved to    : {index_dir.resolve() / 'chunks.jsonl'}")
+    print(f"Indexed at  : {metadata.last_indexed_at}")
     return 0
 
 
 def cmd_search(query: str, top_k: int = 5, index_dir_str: Optional[str] = None) -> int:
-    """Handle the 'search' subcommand."""
+    """Handle the 'search' subcommand with hybrid retrieval support."""
     query = query.strip()
     if not query:
         print("Error: Search query cannot be empty.", file=sys.stderr)
@@ -76,9 +78,26 @@ def cmd_search(query: str, top_k: int = 5, index_dir_str: Optional[str] = None) 
         print("Please index a repository first: python -m gitcontext index <repository_path>", file=sys.stderr)
         return 1
 
-    results = search_index(query=query, chunks=chunks, top_k=top_k)
+    vstore = None
+    qdrant_dir = index_dir / "qdrant"
+    if qdrant_dir.exists():
+        try:
+            from gitcontext.vector_store import QdrantVectorStore
 
-    print(f"\nQuery: \"{query}\"")
+            vstore = QdrantVectorStore(storage_path=qdrant_dir, in_memory=False)
+        except Exception:
+            vstore = None
+
+    if vstore and vstore.is_available():
+        from gitcontext.retrieval import hybrid_search
+
+        results = hybrid_search(query=query, chunks=chunks, top_k=top_k, vector_store=vstore)
+        mode_label = "Hybrid Search (BM25 + Qdrant Dense)"
+    else:
+        results = search_index(query=query, chunks=chunks, top_k=top_k)
+        mode_label = "BM25 Keyword Search"
+
+    print(f"\nQuery: \"{query}\" [{mode_label}]")
     if metadata:
         print(f"Searching in: {metadata.repository_name} ({len(chunks)} chunks)")
     print("=" * 70)
@@ -117,6 +136,8 @@ def cmd_status(index_dir_str: Optional[str] = None) -> int:
     print(f"Source Path    : {metadata.repository_path}")
     print(f"Files Ingested : {metadata.total_files}")
     print(f"Chunks Stored  : {metadata.total_chunks}")
+    dense_status = f"Enabled ({metadata.dense_vectors_count} vectors in Qdrant)" if metadata.dense_indexed else "BM25 keyword only"
+    print(f"Dense Vector   : {dense_status}")
     print(f"Index Path     : {index_dir.resolve() / 'chunks.jsonl'}")
     print(f"Last Indexed   : {metadata.last_indexed_at}\n")
     return 0
@@ -313,7 +334,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="Port number to listen on (default: 8000)",
     )
 
+    # Subcommand: import-repo
+    import_parser = subparsers.add_parser(
+        "import-repo",
+        help="Import and index a repository directly from GitHub",
+    )
+    import_parser.add_argument(
+        "repository_url",
+        type=str,
+        help="GitHub repository URL or identifier (e.g. https://github.com/owner/repo or owner/repo)",
+    )
+    import_parser.add_argument(
+        "--token",
+        type=str,
+        default=None,
+        help="GitHub Personal Access Token for private repository access",
+    )
+    import_parser.add_argument(
+        "--branch",
+        type=str,
+        default=None,
+        help="Specific branch or tag to import",
+    )
+    import_parser.add_argument(
+        "--index-dir",
+        type=str,
+        default=None,
+        help="Target index directory path",
+    )
+
     return parser
+
+
+def cmd_import_repo(
+    repository_url: str,
+    token: Optional[str] = None,
+    branch: Optional[str] = None,
+    index_dir_str: Optional[str] = None,
+) -> int:
+    """Handle the 'import-repo' subcommand."""
+    from gitcontext.github_service import GitHubService
+
+    service = GitHubService(token=token)
+    print(f"Connecting to GitHub to import: {repository_url} ...")
+    try:
+        dest_path = service.import_repository(identifier=repository_url, branch=branch)
+    except Exception as e:
+        print(f"Error importing repository: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Repository successfully cloned/downloaded to: {dest_path}")
+    print("Indexing codebase with hybrid RAG...")
+    return cmd_index(str(dest_path), index_dir_str=index_dir_str)
 
 
 def cmd_serve(host: str = "127.0.0.1", port: int = 8000) -> int:
@@ -355,6 +427,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             index_dir_str=args.index_dir,
             format_type=args.format,
             json_output=args.json_output,
+        )
+    elif args.command == "import-repo":
+        return cmd_import_repo(
+            repository_url=args.repository_url,
+            token=args.token,
+            branch=args.branch,
+            index_dir_str=args.index_dir,
         )
     elif args.command == "serve":
         return cmd_serve(host=args.host, port=args.port)

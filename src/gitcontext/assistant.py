@@ -67,11 +67,25 @@ class CodeAssistant:
         llm_client: Optional[LLMClient] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
+        vector_store: Optional[Any] = None,
     ) -> None:
         self.index_dir = index_dir or get_default_index_dir()
         self.llm_client = llm_client
         self.provider = provider
         self.model = model
+        self.vector_store = vector_store
+
+        if self.vector_store is None:
+            qdrant_dir = self.index_dir / "qdrant"
+            if qdrant_dir.exists():
+                try:
+                    from gitcontext.vector_store import QdrantVectorStore
+
+                    vstore = QdrantVectorStore(storage_path=qdrant_dir, in_memory=False)
+                    if vstore.is_available():
+                        self.vector_store = vstore
+                except Exception:
+                    self.vector_store = None
 
     def ask(
         self,
@@ -118,8 +132,13 @@ class CodeAssistant:
                 provider="internal",
             )
 
-        # 2. Hybrid Retrieval
-        retrieval_results = hybrid_search(query=q_clean, chunks=active_chunks, top_k=top_k)
+        # 2. Hybrid Retrieval (BM25 + Qdrant Dense via RRF)
+        retrieval_results = hybrid_search(
+            query=q_clean,
+            chunks=active_chunks,
+            top_k=top_k,
+            vector_store=self.vector_store,
+        )
 
         if not retrieval_results:
             msg = "Insufficient evidence: No relevant code chunks were retrieved for the question."
@@ -172,6 +191,7 @@ def ask_codebase(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     chunks: Optional[List[CodeChunk]] = None,
+    vector_store: Optional[Any] = None,
 ) -> AssistantResponse:
     """Convenience function to query codebase and get grounded response with citations."""
     assistant = CodeAssistant(
@@ -179,5 +199,6 @@ def ask_codebase(
         llm_client=llm_client,
         provider=provider,
         model=model,
+        vector_store=vector_store,
     )
     return assistant.ask(question=question, top_k=top_k, chunks=chunks)

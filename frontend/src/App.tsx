@@ -8,6 +8,7 @@ import type {
   BugFinding,
   FileReadResult,
   FileTreeNode,
+  GitHubUser,
   PatchProposal,
   RepositoryInfo,
   SystemStatus,
@@ -17,6 +18,7 @@ import {
   applyPatch,
   fetchFileContent,
   fetchFileTree,
+  fetchGitHubUser,
   fetchPatches,
   fetchRepositories,
   fetchStatus,
@@ -39,6 +41,7 @@ export const App: React.FC = () => {
   const [repositories, setRepositories] = useState<RepositoryInfo[]>([])
   const [activeRepoPath, setActiveRepoPath] = useState<string>('')
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([])
+  const [githubUser, setGithubUser] = useState<GitHubUser | null>(null)
 
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
   const [fileData, setFileData] = useState<FileReadResult | null>(null)
@@ -67,6 +70,15 @@ export const App: React.FC = () => {
 
       const repos = await fetchRepositories()
       setRepositories(repos)
+
+      try {
+        const gh = await fetchGitHubUser()
+        if (gh.authenticated && gh.user) {
+          setGithubUser(gh.user)
+        }
+      } catch (e) {
+        // Unauthenticated GitHub is fine
+      }
 
       await loadTree()
 
@@ -147,6 +159,16 @@ export const App: React.FC = () => {
       alert(`Error switching repository: ${e.message}`)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const handleRepoImported = async (repoPath: string) => {
+    await handleSelectRepo(repoPath)
+    try {
+      const repos = await fetchRepositories()
+      setRepositories(repos)
+    } catch (e) {
+      // Ignore
     }
   }
 
@@ -306,6 +328,9 @@ export const App: React.FC = () => {
         onRunAllTests={handleRunAllTests}
         onQuickInvestigate={handleQuickInvestigate}
         isLoading={isLoading}
+        githubUser={githubUser}
+        onUserUpdated={setGithubUser}
+        onRepoImported={handleRepoImported}
       />
 
       <div className="main-workspace">

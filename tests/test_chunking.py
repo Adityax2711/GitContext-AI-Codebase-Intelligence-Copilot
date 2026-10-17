@@ -148,3 +148,11 @@ def test_chunk_file_dispatcher():
 
     unknown_chunks = chunk_file("repo", "data.json", '{"key": 1}')
     assert unknown_chunks == []
+
+
+def test_chunk_test_file():
+    test_content = "def test_addition():\n    assert 1 + 1 == 2\n"
+    chunks = chunk_file("repo", "tests/test_math.py", test_content)
+    assert len(chunks) == 1
+    assert chunks[0].source_type == "test"
+    assert chunks[0].symbol_or_heading == "def test_addition"
